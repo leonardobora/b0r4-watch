@@ -18,8 +18,9 @@ Duas pernas independentes:
 - **Casa:** Home Assistant + ESPHome (luzes na tela)
 - **Energia:** BLE ativo + wake word sob demanda
 - **Temas:** SquareLine Studio + gestos touch
+- **Input:** gestos (BMA423) + botão POWER + touch, sem always-on — veja `docs/input-system.md`
 
-Veja `docs/adr/` para decisões arquiteturais e `docs/CONTEXT.md` para o glossário.
+Veja `docs/adr/` para decisões arquiteturais, `docs/CONTEXT.md` para o glossário e `docs/input-system.md` para o sistema de input.
 
 ## Estrutura
 

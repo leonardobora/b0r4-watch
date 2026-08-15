@@ -36,3 +36,21 @@ Uso do rádio LoRa para comunicação ponto-a-ponto ou mesh (Meshtastic).
 
 ### Tema
 Combinação de watchface, cores, fontes e layout da UI. Produzido no SquareLine Studio e exportado para LVGL.
+
+### Gesture Engine
+Módulo do firmware que escuta eventos de input (gestos, botão, touch, voz) e os traduz em Actions.
+
+### Trigger
+Padrão detectável que dispara uma ação. Ex.: `shake_x:2`, `double_click`, `wrist_tilt`.
+
+### Action
+Comando executado quando um trigger é reconhecido. Pode ser local, um intent ou uma mensagem para o servidor.
+
+### Gesture Profile
+Arquivo de configuração (`gestures.json`) que mapeia triggers em actions. Permite white-label por cliente.
+
+### Input Source
+Origem do evento de input: `ACCEL`, `BUTTON`, `TOUCH` ou `VOICE`.
+
+### Custom Shake
+Gesto detectado por software a partir dos dados brutos do acelerômetro, como "chacoalhar 2x pro lado".
