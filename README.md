@@ -19,8 +19,9 @@ Duas pernas independentes:
 - **Energia:** BLE ativo + wake word sob demanda
 - **Temas:** SquareLine Studio + gestos touch
 - **Input:** gestos (BMA423) + botão POWER + touch, sem always-on — veja `docs/input-system.md`
+- **Assistente:** pipeline ASR → LLM → TTS via WebSocket, com providers configuráveis — veja `server/README.md`
 
-Veja `docs/adr/` para decisões arquiteturais, `docs/CONTEXT.md` para o glossário e `docs/input-system.md` para o sistema de input.
+Veja `docs/adr/` para decisões arquiteturais, `docs/CONTEXT.md` para o glossário, `docs/input-system.md` para o sistema de input e `server/README.md` para o assistente.
 
 ## Estrutura
 
