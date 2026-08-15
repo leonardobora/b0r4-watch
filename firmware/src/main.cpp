@@ -7,12 +7,52 @@
 
 #include <LilyGoLib.h>
 #include <LV_Helper.h>
+#include "avatar/Avatar.h"
+#include "avatar/modifiers/BlinkModifier.h"
+#include "avatar/modifiers/BreathModifier.h"
 
 #define USE_RADIO_SX1262
 
 #if defined(USE_RADIO_SX1262)
 SX1262 radio = newModule();
 #endif
+
+// Avatar e modifiers (alocação dinâmica porque precisam de LVGL já iniciado)
+static Avatar* avatar = nullptr;
+static BlinkModifier* blink = nullptr;
+static BreathModifier* breath = nullptr;
+
+static const Emotion kDemoEmotions[] = {
+    Emotion::NEUTRAL,
+    Emotion::HAPPY,
+    Emotion::ANGRY,
+    Emotion::SAD,
+    Emotion::SURPRISED,
+    Emotion::SLEEPY,
+    Emotion::DOUBT
+};
+static constexpr size_t kDemoEmotionCount = sizeof(kDemoEmotions) / sizeof(kDemoEmotions[0]);
+static size_t currentEmotionIndex = 0;
+
+static void avatar_update_cb(lv_timer_t*)
+{
+    if (!avatar || !blink || !breath) return;
+
+    uint32_t now = millis();
+    FaceState state;
+    state.emotion = kDemoEmotions[currentEmotionIndex];
+    state.blink = blink->update(now);
+    state.breath = breath->update(now);
+    state.gazeX = 0;
+    state.gazeY = 0;
+
+    avatar->update(state);
+}
+
+static void emotion_cycle_cb(lv_timer_t*)
+{
+    currentEmotionIndex = (currentEmotionIndex + 1) % kDemoEmotionCount;
+}
 
 void setup()
 {
@@ -21,10 +61,13 @@ void setup()
     watch.begin();
     beginLvglHelper();
 
-    // Tela mínima de boas-vindas
-    lv_obj_t *label = lv_label_create(lv_scr_act());
-    lv_label_set_text(label, "b0r4-watch\nhello");
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+    avatar = new Avatar(lv_scr_act());
+    blink = new BlinkModifier();
+    breath = new BreathModifier();
+
+    // Atualiza face a ~30 FPS; emoção muda a cada 3 s.
+    lv_timer_create(avatar_update_cb, 33, nullptr);
+    lv_timer_create(emotion_cycle_cb, 3000, nullptr);
 }
 
 void loop()

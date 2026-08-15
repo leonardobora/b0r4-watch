@@ -16,6 +16,18 @@ pio run
 
 A primeira vez baixa todas as libs (~500MB) e compila o ESP32 Arduino core.
 
+O build já foi validado: **RAM 7.3% / Flash 21.2%**.
+
+## Avatar (Fase 0)
+
+`main.cpp` roda um demo do avatar ASCII:
+
+- **7 emoções:** `NEUTRAL`, `HAPPY`, `ANGRY`, `SAD`, `SURPRISED`, `SLEEPY`, `DOUBT`.
+- **Modifiers:** `BlinkModifier` (piscada) e `BreathModifier` (respiração).
+- **Timing:** face a ~30 FPS; emoção muda a cada 3 s.
+
+Código: `src/avatar/` · ADR: `../docs/adr/0008-avatar.md`.
+
 ## Estrutura
 
 ```
@@ -23,7 +35,12 @@ firmware/
 ├── boards/                    # definição da placa LilyGoWatch-S3
 ├── include/                   # Setup212 do TFT_eSPI (vendored)
 ├── src/
-│   └── main.cpp               # entry point mínimo
+│   ├── avatar/                # sistema de avatar ASCII (LVGL)
+│   │   ├── Avatar.h/.cpp
+│   │   └── modifiers/
+│   │       ├── BlinkModifier.h/.cpp
+│   │       └── BreathModifier.h/.cpp
+│   └── main.cpp               # entry point + demo do avatar
 └── platformio.ini             # config do projeto
 ```
 
