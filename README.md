@@ -13,6 +13,12 @@
 </p>
 
 <p align="center">
+  <a href="https://www.buymeacoffee.com/leonardobora" target="_blank" rel="noopener">
+    <img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=leonardobora&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a coffee" width="220">
+  </a>
+</p>
+
+<p align="center">
   <b>Um smartwatch pessoal de código aberto, construído do zero no LILYGO T-Watch S3.</b><br>
   <sub>Firmware ESP32/LVGL no pulso + servidor-agente Python (FastAPI) com IA de voz, música e automação de casa.</sub>
 </p>
@@ -282,3 +288,9 @@ python scripts/test_client.py
 ## Licença
 
 [MIT](LICENSE)
+
+---
+
+## Sobre o autor
+
+**Leonardo Bora** — desenvolvedor e estudante em Curitiba, Brasil. Construindo o b0r4-watch do zero, do hardware ao software.
