@@ -1,5 +1,5 @@
 ﻿<p align="center">
-  <img src="banner.png" alt="b0r4-watch" width="100%">
+  <img src="banner.jpg" alt="b0r4-watch" width="100%">
 </p>
 
 <p align="center">
