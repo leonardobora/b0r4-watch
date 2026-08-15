@@ -1,0 +1,18 @@
+[project]
+name = "b0r4-watch-server"
+version = "0.1.0"
+description = "Servidor-agente do b0r4-watch"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=12.0",
+    "paho-mqtt>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5.0",
+    "pytest>=8.0.0",
+]
