@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>b0r4-watch — Smartwatch pessoal de código aberto</title>
+  <meta name="description" content="Um smartwatch pessoal de código aberto, construído do zero no LILYGO T-Watch S3. Firmware ESP32/LVGL + servidor-agente Python com IA de voz, música e automação de casa.">
+  <meta property="og:title" content="b0r4-watch — Smartwatch pessoal de código aberto">
+  <meta property="og:description" content="Firmware ESP32/LVGL no pulso + servidor-agente Python (FastAPI) com IA de voz, música e automação de casa.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://leonardobora.github.io/b0r4-watch/">
+  <meta property="og:image" content="https://raw.githubusercontent.com/leonardobora/b0r4-watch/main/banner.jpg">
+  <meta name="theme-color" content="#0d1117">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --bg-card: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #f4c542;
+      --accent-2: #58a6ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --blue: #388bfd;
+      --purple: #bc8cff;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+    }
+    a { color: var(--accent-2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 900px; margin: 0 auto; padding: 0 20px; }
+
+    /* Banner */
+    .banner { width: 100%; border-radius: 12px; margin-top: 40px; border: 1px solid var(--border); }
+
+    /* Header */
+    header { text-align: center; padding: 30px 0 10px; }
+    header h1 { font-size: 2.2rem; letter-spacing: 0.5px; }
+    header h1 span { color: var(--accent); }
+    header p.tagline { color: var(--muted); margin-top: 8px; font-size: 1.05rem; }
+    header p.sub { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
+
+    /* Badges */
+    .badges { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 20px 0; }
+    .badges img { height: 22px; border-radius: 4px; }
+
+    /* BMC button */
+    .bmc-wrap { text-align: center; margin: 30px 0 10px; }
+    .bmc-wrap img { border-radius: 8px; }
+
+    /* Sections */
+    section { margin: 36px 0; }
+    h2 {
+      font-size: 1.4rem;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    h2 .emoji { margin-right: 8px; }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin-bottom: 12px;
+    }
+    .card p { color: var(--muted); font-size: 0.95rem; }
+    .card p strong { color: var(--text); }
+
+    /* Status legend */
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-bottom: 20px; font-size: 0.85rem; color: var(--muted); }
+
+    /* Feature table */
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    td:last-child { white-space: nowrap; }
+    .st { font-size: 0.8rem; padding: 2px 10px; border-radius: 20px; font-weight: 600; }
+    .st-done { background: rgba(63,185,80,0.15); color: var(--green); }
+    .st-wip { background: rgba(210,153,34,0.15); color: var(--yellow); }
+    .st-plan { background: rgba(56,139,253,0.15); color: var(--blue); }
+    .st-future { background: rgba(188,140,255,0.15); color: var(--purple); }
+
+    /* ADR chips */
+    .adr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+    .adr { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 0.88rem; }
+    .adr code { color: var(--accent-2); font-size: 0.8rem; }
+    .adr a { font-weight: 500; }
+
+    /* Roadmap */
+    .roadmap { list-style: none; }
+    .roadmap li { display: flex; align-items: baseline; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.95rem; }
+    .roadmap li:last-child { border-bottom: none; }
+    .roadmap .num { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; min-width: 28px; }
+    .roadmap .title { font-weight: 600; }
+    .roadmap .desc { color: var(--muted); font-size: 0.88rem; }
+
+    /* Repo tree */
+    pre {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      overflow-x: auto;
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    pre .c { color: var(--green); }
+    pre .p { color: var(--accent); }
+
+    /* Footer */
+    footer { text-align: center; color: var(--muted); font-size: 0.85rem; padding: 40px 0; border-top: 1px solid var(--border); margin-top: 40px; }
+    footer a { color: var(--muted); text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <img class="banner" src="banner.jpg" alt="b0r4-watch banner">
+
+    <header>
+      <h1>b0r4<span>-watch</span></h1>
+      <p class="tagline">Um smartwatch pessoal de código aberto, construído do zero no LILYGO T-Watch S3.</p>
+      <p class="sub">Firmware ESP32/LVGL no pulso + servidor-agente Python (FastAPI) com IA de voz, música e automação de casa.</p>
+      <div class="badges">
+        <a href="https://github.com/leonardobora/b0r4-watch/stargazers"><img src="https://img.shields.io/github/stars/leonardobora/b0r4-watch?style=flat&logo=github&color=f4c542" alt="GitHub Repo stars"></a>
+        <a href="https://github.com/leonardobora/b0r4-watch/blob/main/LICENSE"><img src="https://img.shields.io/github/license/leonardobora/b0r4-watch" alt="License"></a>
+        <a href="https://github.com/leonardobora/b0r4-watch/issues"><img src="https://img.shields.io/github/issues/leonardobora/b0r4-watch" alt="Issues"></a>
+        <a href="https://github.com/leonardobora/b0r4-watch/pulls"><img src="https://img.shields.io/github/issues-pr/leonardobora/b0r4-watch" alt="Pull Requests"></a>
+        <a href="https://github.com/leonardobora/b0r4-watch/commits"><img src="https://img.shields.io/github/last-commit/leonardobora/b0r4-watch" alt="Last Commit"></a>
+        <a href="https://github.com/leonardobora/b0r4-watch"><img src="https://img.shields.io/github/languages/top/leonardobora/b0r4-watch" alt="Top Language"></a>
+        <a href="https://github.com/leonardobora/b0r4-watch"><img src="https://img.shields.io/github/repo-size/leonardobora/b0r4-watch" alt="Repo Size"></a>
+      </div>
+    </header>
+
+    <div class="bmc-wrap">
+      <a href="https://www.buymeacoffee.com/leonardobora" target="_blank" rel="noopener">
+        <img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=leonardobora&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a coffee">
+      </a>
+    </div>
+
+    <!-- O que é -->
+    <section id="sobre">
+      <h2><span class="emoji">🕐</span>O que é isso?</h2>
+      <div class="card">
+        <p><strong>Um smartwatch que você mesmo constrói e programa.</strong> Em vez de um relógio pronto com sistema fechado, o b0r4-watch usa a placa de hardware aberta <strong>LILYGO T-Watch S3</strong> — pequeno computador com tela touch, acelerômetro, microfone, Bluetooth, Wi-Fi e rádio LoRa — e um software escrito aqui mesmo, em duas partes que conversam entre si:</p>
+        <p style="margin-top:10px">1. <strong>O "cérebro" do relógio</strong> (<code>firmware/</code>) — roda na placa, controla tela, sensores e o que aparece no pulso.<br>
+        2. <strong>Um "assistente" em casa</strong> (<code>server/</code>) — Python no seu computador ou servidor, dá poderes extras: entender sua voz, tocar música, controlar luzes e responder com IA.</p>
+        <p style="margin-top:10px">Tudo <strong>aberto e feito à mão</strong>: sem apps proprietários, sem nuvem obrigatória, sem caixa-preta. Ideal para aprender, hackear e personalizar.</p>
+      </div>
+    </section>
+
+    <!-- Funcionalidades -->
+    <section id="funcionalidades">
+      <h2><span class="emoji">✨</span>Funcionalidades</h2>
+      <div class="legend">
+        <span><span class="st st-done">✅ Implementado</span></span>
+        <span><span class="st st-wip">🚧 Em andamento</span></span>
+        <span><span class="st st-plan">📐 Projetado</span></span>
+        <span><span class="st st-future">🔮 Futuro</span></span>
+      </div>
+      <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>Funcionalidade</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Avatar ASCII animado na tela (LVGL)</td><td><span class="st st-done">✅</span></td></tr>
+          <tr><td>Assistente de voz completo (ouvir → pensar → responder em áudio)</td><td><span class="st st-done">✅</span></td></tr>
+          <tr><td>Providers de IA configuráveis (openai / mock / edge_tts)</td><td><span class="st st-done">✅</span></td></tr>
+          <tr><td>Teste do pipeline sem o relógio físico (modo mock)</td><td><span class="st st-done">✅</span></td></tr>
+          <tr><td>Bare metal: flash, tela, RTC, sleep</td><td><span class="st st-future">🔮</span></td></tr>
+          <tr><td>LVGL launcher + temas visuais</td><td><span class="st st-future">🔮</span></td></tr>
+          <tr><td>Notificações do iPhone (ANCS via BLE)</td><td><span class="st st-future">🔮</span></td></tr>
+          <tr><td>Música (ytmusicapi + media keys + A2DP)</td><td><span class="st st-future">🔮</span></td></tr>
+          <tr><td>Automação de casa (ESPHome / Home Assistant)</td><td><span class="st st-future">🔮</span></td></tr>
+          <tr><td>IA híbrida (WakeNet9 + MultiNet + cloud)</td><td><span class="st st-future">🔮</span></td></tr>
+          <tr><td>Hacker: IR, LoRa, Wi-Fi scan</td><td><span class="st st-future">🔮</span></td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <!-- Decisões -->
+    <section id="adr">
+      <h2><span class="emoji">📐</span>Decisões arquiteturais</h2>
+      <div class="adr-grid">
+        <div class="adr"><code>0001</code> · <a href="https://github.com/leonardobora/b0r4-watch/blob/main/docs/adr/0001-toolchain.md">Toolchain do firmware</a><br><span style="color:var(--muted)">Arduino + PlatformIO</span></div>
+        <div class="adr"><code>0002</code> · <a href="https://github.com/leonardobora/b0r4-watch/blob/main/docs/adr/0002-hardware-variant.md">Variante de hardware</a><br><span style="color:var(--muted)">SX1262 915 MHz</span></div>
+        <div class="adr"><code>0003</code> · <a href="https://github.com/leonardobora/b0r4-watch/blob/main/docs/adr/0003-architecture.md">Arquitetura</a><br><span style="color:var(--muted)">Firmware + servidor reutilizável</span></div>
+        <div class="adr"><code>0004</code> · <a href="https://github.com/leonardobora/b0r4-watch/blob/main/docs/adr/0004-ai-strategy.md">Estratégia de IA</a><br><span style="color:var(--muted)">Híbrido 3 camadas</span></div>
+        <div class="adr"><code>0005</code> · <a href="https://github.com/leonardobora/b0r4-watch/blob/main/docs/adr/0005-energy.md">Energia</a><br><span style="color:var(--muted)">BLE ativo, Wi-Fi sob demanda</span></div>
+        <div class="adr"><code>0006</code> · <a href="https://github.com/leonardobora/b0r4-watch/blob/main/docs/adr/0006-notifications.md">Notificações</a><br><span style="color:var(--muted)">ANCS via BLE do iPhone</span></div>
+        <div class="adr"><code>0007</code> · <a href="https://github.com/leonardobora/b0r4-watch/blob/main/docs/adr/0007-input-system.md">Sistema de input</a><br><span style="color:var(--muted)">Gestos + botão + touch + voz</span></div>
+        <div class="adr"><code>0008</code> · <a href="https://github.com/leonardobora/b0r4-watch/blob/main/docs/adr/0008-avatar.md">Avatar</a><br><span style="color:var(--muted)">Rosto ASCII em LVGL</span></div>
+      </div>
+    </section>
+
+    <!-- Roadmap -->
+    <section id="roadmap">
+      <h2><span class="emoji">🗺️</span>Roadmap</h2>
+      <ul class="roadmap">
+        <li><span class="num">1</span><span><span class="title">Setup (Fase 0)</span> — estrutura do projeto, compilar sem placa, avatar animado <span class="st st-done">✅</span></span></li>
+        <li><span class="num">2</span><span><span class="title">Bare metal</span> — flash, tela, RTC, sleep</span></li>
+        <li><span class="num">3</span><span><span class="title">LVGL launcher + temas</span> — menu de apps e temas visuais</span></li>
+        <li><span class="num">4</span><span><span class="title">ANCS (iPhone)</span> — notificações via BLE</span></li>
+        <li><span class="num">5</span><span><span class="title">Música</span> — ytmusicapi + media keys + A2DP</span></li>
+        <li><span class="num">6</span><span><span class="title">Casa</span> — ESPHome / Home Assistant</span></li>
+        <li><span class="num">7</span><span><span class="title">IA híbrida</span> — WakeNet9 + MultiNet + cloud</span></li>
+        <li><span class="num">8</span><span><span class="title">Hacker</span> — IR, LoRa, Wi-Fi scan</span></li>
+        <li><span class="num">9</span><span><span class="title">Futuro</span> — GPS shield, wake word always-on, TLS</span></li>
+      </ul>
+    </section>
+
+    <!-- Estrutura -->
+    <section id="estrutura">
+      <h2><span class="emoji">📁</span>Estrutura do repositório</h2>
+<pre>
+b0r4-watch/
+├── <span class="p">firmware/</span>  <span class="c"># Plataforma T-Watch S3 (Arduino + PlatformIO + LVGL)</span>
+│   └── src/avatar/        <span class="c"># sistema de avatar ASCII (7 emoções + modifiers)</span>
+├── <span class="p">server/</span>    <span class="c"># Servidor-agente Python (FastAPI + WebSocket + MQTT)</span>
+│   ├── main.py            <span class="c"># endpoints REST + WebSocket /ws/audio</span>
+│   └── src/               <span class="c"># asr · llm · tts · music · lights · tools</span>
+└── <span class="p">docs/</span>      <span class="c"># ADRs (decisões arquiteturais) + glossário</span>
+</pre>
+    </section>
+
+    <!-- Como começar -->
+    <section id="comecar">
+      <h2><span class="emoji">🚀</span>Como começar</h2>
+      <div class="card">
+        <p><strong>Firmware:</strong> <code>cd firmware &amp;&amp; pio run</code> — a primeira execução baixa as dependências (~500 MB) e compila o ESP32 Arduino core. Com o relógio em modo download: <code>pio run --target upload</code>.</p>
+        <p style="margin-top:8px"><strong>Servidor:</strong> <code>cd server</code>, <code>python -m venv .venv</code>, <code>pip install -r requirements.txt</code>, <code>copy env.example .env</code>, <code>uvicorn main:app --reload</code>. O endpoint <code>/health</code> responde em <code>localhost:8000/health</code>.</p>
+        <p style="margin-top:8px"><strong>Testar sem o relógio:</strong> rode o servidor e <code>python scripts/test_client.py</code> — envia 1 s de silêncio e mostra a resposta do pipeline (modo mock, sem gastar nada).</p>
+      </div>
+      <p style="text-align:center; margin-top:20px"><a href="https://github.com/leonardobora/b0r4-watch">👉 Ver o repositório no GitHub</a></p>
+    </section>
+
+    <div class="bmc-wrap">
+      <a href="https://www.buymeacoffee.com/leonardobora" target="_blank" rel="noopener">
+        <img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=leonardobora&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a coffee">
+      </a>
+      <p style="color:var(--muted); font-size:0.85rem; margin-top:8px">Gostou do projeto? Um café ajuda a manter o desenvolvimento. ☕</p>
+    </div>
+
+    <footer>
+      <p><a href="https://github.com/leonardobora/b0r4-watch">b0r4-watch</a> · Licença MIT · Feito à mão, sem caixa-preta.</p>
+    </footer>
+  </div>
+</body>
+</html>
