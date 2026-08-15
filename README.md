@@ -293,4 +293,4 @@ python scripts/test_client.py
 
 ## Sobre o autor
 
-**Leonardo Bora** — desenvolvedor e estudante em Curitiba, Brasil. Construindo o b0r4-watch do zero, do hardware ao software.
+**Leonardo Bora (The Neuromancer)** — desenvolvedor e estudante em Curitiba, Brasil. Construindo o b0r4-watch do zero, do hardware ao software.
