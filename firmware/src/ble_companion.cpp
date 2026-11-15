@@ -61,6 +61,10 @@ char                   gArtist[56]  = {0};
 char                   gTrack[80]   = {0};
 char                   gAlbum[56]   = {0};
 bool                   gPlaying     = false;
+bool                   gShuffle     = false;
+int                    gRepeat      = 0;  // 0=off, 1=all, 2=one
+char                   gQueue[6][48] = {{0}};
+int                    gQueueCount  = 0;
 
 bool                   gNavActive   = false;
 char                   gNavAction[24] = {0};
@@ -108,6 +112,18 @@ void onAmsEntityUpdate(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, 
         // Player PlaybackInfo: "<state>,<rate>,<elapsed>" where state '1' = Playing
         portENTER_CRITICAL(&gMux);
         gPlaying = (val[0] == '1');
+        gUiDirty = true;
+        portEXIT_CRITICAL(&gMux);
+    } else if (entity == 0 && attr == 2) {
+        // Player ShuffleMode: "0"=Off, "1"/"2"=On
+        portENTER_CRITICAL(&gMux);
+        gShuffle = (val[0] != '0' && val[0] != 0);
+        gUiDirty = true;
+        portEXIT_CRITICAL(&gMux);
+    } else if (entity == 0 && attr == 3) {
+        // Player RepeatMode: "0"=Off, "1"=One, "2"=All
+        portENTER_CRITICAL(&gMux);
+        gRepeat = (val[0] == '1') ? 2 : (val[0] == '2' ? 1 : 0);
         gUiDirty = true;
         portEXIT_CRITICAL(&gMux);
     } else if (entity == 2) {
@@ -489,12 +505,48 @@ void handleLine(const char *raw)
             gUiDirty = true;
             portEXIT_CRITICAL(&gMux);
         } else if (strcmp(type, "musicstate") == 0) {
-            char state[16];
+            char state[16] = {0}, repStr[16] = {0};
             extractJsonStr(json, "state", state, sizeof(state));
+            bool hasShuf = (strstr(json, "\"shuffle\":true") != nullptr || strstr(json, "\"shuffle\":false") != nullptr);
+            bool shufVal = (strstr(json, "\"shuffle\":true") != nullptr);
+            bool hasRepStr = extractJsonStr(json, "repeat", repStr, sizeof(repStr));
+            const char *repNum = hasRepStr ? nullptr : strstr(json, "\"repeat\":");
             portENTER_CRITICAL(&gMux);
-            gPlaying = (strcmp(state, "play") == 0);
+            if (state[0]) gPlaying = (strcmp(state, "play") == 0);
+            if (hasShuf)  gShuffle = shufVal;
+            if (hasRepStr) {
+                if (strcmp(repStr, "one") == 0 || strcmp(repStr, "track") == 0) gRepeat = 2;
+                else if (strcmp(repStr, "all") == 0 || strcmp(repStr, "playlist") == 0) gRepeat = 1;
+                else gRepeat = 0;
+            } else if (repNum) {
+                int rv = atoi(repNum + 9);
+                gRepeat = (rv == 2) ? 2 : (rv == 1 ? 1 : 0);
+            }
             gUiDirty = true;
             portEXIT_CRITICAL(&gMux);
+        } else if (strcmp(type, "queue") == 0) {
+            const char *arr = strstr(json, "\"items\":[");
+            if (arr) {
+                arr += 9;
+                portENTER_CRITICAL(&gMux);
+                gQueueCount = 0;
+                while (*arr && *arr != ']' && gQueueCount < 6) {
+                    const char *q1 = strchr(arr, '"');
+                    if (!q1) break;
+                    q1++;
+                    const char *q2 = strchr(q1, '"');
+                    if (!q2) break;
+                    size_t len = (size_t)(q2 - q1);
+                    if (len >= sizeof(gQueue[0])) len = sizeof(gQueue[0]) - 1;
+                    memcpy(gQueue[gQueueCount], q1, len);
+                    gQueue[gQueueCount][len] = 0;
+                    sanitizePtBrAscii(gQueue[gQueueCount]);
+                    gQueueCount++;
+                    arr = q2 + 1;
+                }
+                gUiDirty = true;
+                portEXIT_CRITICAL(&gMux);
+            }
         } else if (strcmp(type, "nav") == 0) {
             char action[24] = {0}, dist[24] = {0}, instr[96] = {0}, eta[20] = {0};
             extractJsonStr(json, "action", action, sizeof(action));
@@ -1100,10 +1152,38 @@ void inboxSummary(char *out, size_t n)
     portEXIT_CRITICAL(&gMux);
 }
 
-const char *musicTrack()  { return gTrack; }
-const char *musicArtist() { return gArtist; }
-const char *musicAlbum()  { return gAlbum; }
-bool        musicPlaying(){ return gPlaying; }
+const char *musicTrack()   { return gTrack; }
+const char *musicArtist()  { return gArtist; }
+const char *musicAlbum()   { return gAlbum; }
+bool        musicPlaying() { return gPlaying; }
+bool        musicShuffle() { return gShuffle; }
+int         musicRepeat()  { return gRepeat; }
+int         queueCount()   { return gQueueCount; }
+const char *queueItem(int idx)
+{
+    if (idx < 0 || idx >= gQueueCount) return "";
+    return gQueue[idx];
+}
+void setQueueLocal(const char *pipeList)
+{
+    if (!pipeList) return;
+    portENTER_CRITICAL(&gMux);
+    gQueueCount = 0;
+    const char *p = pipeList;
+    while (*p && gQueueCount < 6) {
+        const char *bar = strchr(p, '|');
+        size_t len = bar ? (size_t)(bar - p) : strlen(p);
+        if (len >= sizeof(gQueue[0])) len = sizeof(gQueue[0]) - 1;
+        memcpy(gQueue[gQueueCount], p, len);
+        gQueue[gQueueCount][len] = 0;
+        sanitizePtBrAscii(gQueue[gQueueCount]);
+        if (gQueue[gQueueCount][0]) gQueueCount++;
+        if (!bar) break;
+        p = bar + 1;
+    }
+    gUiDirty = true;
+    portEXIT_CRITICAL(&gMux);
+}
 
 void mediaSnapshot(char *track, size_t tn, char *artist, size_t an,
                    char *album, size_t aln, bool *playing)
@@ -1270,6 +1350,41 @@ bool sendOmaAction(const char *act)
 {
     char buf[64];
     snprintf(buf, sizeof(buf), "{\"t\":\"oma\",\"act\":\"%s\"}\r\n", act);
+    return sendRawLine(buf);
+}
+
+bool toggleShuffle()
+{
+    portENTER_CRITICAL(&gMux);
+    gShuffle = !gShuffle;
+    gUiDirty = true;
+    portEXIT_CRITICAL(&gMux);
+    bool sentApple = false;
+    if (gAppleConnected && gAmsRemoteChar) {
+        uint8_t op = 0x08;  // ToggleShuffleMode
+        sentApple = gAmsRemoteChar->writeValue(&op, 1, true);
+    }
+    return sendOmaAction("shuffle") || sentApple;
+}
+
+bool toggleRepeat()
+{
+    portENTER_CRITICAL(&gMux);
+    gRepeat = (gRepeat + 1) % 3;
+    gUiDirty = true;
+    portEXIT_CRITICAL(&gMux);
+    bool sentApple = false;
+    if (gAppleConnected && gAmsRemoteChar) {
+        uint8_t op = 0x07;  // ToggleRepeatMode
+        sentApple = gAmsRemoteChar->writeValue(&op, 1, true);
+    }
+    return sendOmaAction("repeat") || sentApple;
+}
+
+bool sendQueuePlay(int idx)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"t\":\"oma\",\"act\":\"qplay\",\"idx\":%d}\r\n", idx);
     return sendRawLine(buf);
 }
 

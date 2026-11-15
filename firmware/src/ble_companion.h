@@ -55,9 +55,17 @@ const char *musicTrack();
 const char *musicArtist();
 const char *musicAlbum();
 bool        musicPlaying();
+bool        musicShuffle();
+int         musicRepeat();  // 0=off, 1=all, 2=one
 void        mediaSnapshot(char *track, size_t tn, char *artist, size_t an,
                           char *album, size_t aln, bool *playing);
 void        setMediaLocal(bool playing, const char *artist, const char *track, const char *album);
+int         queueCount();
+const char *queueItem(int idx);
+void        setQueueLocal(const char *pipeList);
+bool        toggleShuffle();
+bool        toggleRepeat();
+bool        sendQueuePlay(int idx);
 
 // Turn-by-turn navigation & GPS speed telemetry (from Gadgetbridge "t":"nav" / "t":"gps").
 bool        navActive();

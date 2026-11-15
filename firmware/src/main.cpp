@@ -53,6 +53,7 @@ static int  cfgPalette     = 0;
 static int  cfgBright      = 160;
 static int  cfgTimeoutS    = 15;
 static int  cfgTzOffsetMin = -180;  // UTC-03 (Brazil)
+static bool cfgWristCtrl   = true;
 static Preferences prefs;
 
 static inline lv_color_t colBg()      { return lv_color_hex(PALETTES[cfgPalette].bg); }
@@ -97,6 +98,7 @@ static lv_obj_t *lblLinkFace = nullptr, *lblDate = nullptr, *lblTime = nullptr, 
 static lv_obj_t *lblBattery = nullptr, *barBattery = nullptr, *lblStepsFace = nullptr;
 static lv_obj_t *lblMediaState = nullptr, *lblMediaTrack = nullptr, *lblMediaArtist = nullptr;
 static lv_obj_t *lblMediaAlbum = nullptr, *boxMediaCard = nullptr, *btnMediaPlay = nullptr, *lblMediaPlay = nullptr;
+static lv_obj_t *lblMediaShuf = nullptr, *lblMediaRep = nullptr, *boxMediaQueue = nullptr, *lblMediaQueue[6] = {nullptr};
 static lv_obj_t *lblNavEta = nullptr, *lblNavDist = nullptr, *lblNavAction = nullptr, *lblNavInstr = nullptr;
 static lv_obj_t *lblNavHdr = nullptr, *lblNavSpeed = nullptr, *lblNavMusic = nullptr, *lblRideBtn = nullptr;
 static lv_obj_t *wakeShield = nullptr;
@@ -125,6 +127,8 @@ static lv_indev_t *gIndev          = nullptr;
 static bool        touchWasDown    = false;
 static int16_t     touchX0 = 0, touchY0 = 0;
 static uint32_t    gTiltSeen       = 0;
+static uint32_t    gDoubleTapSeen  = 0;
+static uint32_t    gLastGestureMs  = 0;
 static uint32_t    gLastStepCount  = 0;
 static uint32_t    lastClockMs     = 0;
 static uint32_t    lastBatteryMs   = 0;
@@ -570,54 +574,54 @@ static void buildMedia(lv_obj_t *scr)
 
     // Squared Now-Playing display card
     boxMediaCard = lv_obj_create(p);
-    lv_obj_set_size(boxMediaCard, 220, 94);
-    lv_obj_align(boxMediaCard, LV_ALIGN_CENTER, 0, -34);
+    lv_obj_set_size(boxMediaCard, 220, 86);
+    lv_obj_align(boxMediaCard, LV_ALIGN_CENTER, 0, -42);
     lv_obj_set_style_bg_color(boxMediaCard, colSurface(), 0);
     lv_obj_set_style_border_width(boxMediaCard, 1, 0);
     lv_obj_set_style_border_color(boxMediaCard, colMuted(), 0);
     lv_obj_set_style_radius(boxMediaCard, 0, 0);
-    lv_obj_set_style_pad_all(boxMediaCard, 8, 0);
+    lv_obj_set_style_pad_all(boxMediaCard, 7, 0);
     lv_obj_set_scrollbar_mode(boxMediaCard, LV_SCROLLBAR_MODE_OFF);
 
     lblMediaTrack = lv_label_create(boxMediaCard);
-    lv_obj_set_width(lblMediaTrack, 200);
+    lv_obj_set_width(lblMediaTrack, 202);
     lv_label_set_long_mode(lblMediaTrack, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_font(lblMediaTrack, FONT_M, 0);
     lv_obj_set_style_text_color(lblMediaTrack, colText(), 0);
-    lv_obj_align(lblMediaTrack, LV_ALIGN_TOP_LEFT, 0, 2);
+    lv_obj_align(lblMediaTrack, LV_ALIGN_TOP_LEFT, 0, 1);
     lv_label_set_text(lblMediaTrack, "No track playing");
 
     lblMediaArtist = lv_label_create(boxMediaCard);
-    lv_obj_set_width(lblMediaArtist, 200);
+    lv_obj_set_width(lblMediaArtist, 202);
     lv_label_set_long_mode(lblMediaArtist, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(lblMediaArtist, FONT_S, 0);
     lv_obj_set_style_text_color(lblMediaArtist, colAccent(), 0);
-    lv_obj_align(lblMediaArtist, LV_ALIGN_TOP_LEFT, 0, 32);
+    lv_obj_align(lblMediaArtist, LV_ALIGN_TOP_LEFT, 0, 29);
     lv_label_set_text(lblMediaArtist, "Phone / PC BLE");
 
     lblMediaAlbum = lv_label_create(boxMediaCard);
-    lv_obj_set_width(lblMediaAlbum, 200);
+    lv_obj_set_width(lblMediaAlbum, 202);
     lv_label_set_long_mode(lblMediaAlbum, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(lblMediaAlbum, FONT_XS, 0);
     lv_obj_set_style_text_color(lblMediaAlbum, colMuted(), 0);
-    lv_obj_align(lblMediaAlbum, LV_ALIGN_TOP_LEFT, 0, 56);
+    lv_obj_align(lblMediaAlbum, LV_ALIGN_TOP_LEFT, 0, 52);
     lv_label_set_text(lblMediaAlbum, "Start music on phone or PC");
 
     lv_obj_t *rule = lv_obj_create(boxMediaCard);
-    lv_obj_set_size(rule, 200, 2);
+    lv_obj_set_size(rule, 202, 2);
     lv_obj_align(rule, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(rule, colAccent(), 0);
     lv_obj_set_style_border_width(rule, 0, 0);
     lv_obj_set_style_radius(rule, 0, 0);
 
     // Transport buttons: PREV | PLAY/PAUSE | NEXT
-    mkButton(p, LV_SYMBOL_PREV, -76, 44, 64, 38, [](lv_event_t *) {
+    mkButton(p, LV_SYMBOL_PREV, -76, 26, 64, 34, [](lv_event_t *) {
         blecomp::sendMusicCmd("previous");
     }, nullptr);
 
     btnMediaPlay = lv_button_create(p);
-    lv_obj_set_size(btnMediaPlay, 78, 38);
-    lv_obj_align(btnMediaPlay, LV_ALIGN_CENTER, 0, 44);
+    lv_obj_set_size(btnMediaPlay, 78, 34);
+    lv_obj_align(btnMediaPlay, LV_ALIGN_CENTER, 0, 26);
     lv_obj_set_style_bg_color(btnMediaPlay, colSurface(), 0);
     lv_obj_set_style_border_width(btnMediaPlay, 2, 0);
     lv_obj_set_style_border_color(btnMediaPlay, colAccent(), 0);
@@ -633,17 +637,76 @@ static void buildMedia(lv_obj_t *scr)
     lv_obj_set_style_text_color(lblMediaPlay, colAccent(), 0);
     lv_obj_center(lblMediaPlay);
 
-    mkButton(p, LV_SYMBOL_NEXT, 76, 44, 64, 38, [](lv_event_t *) {
+    mkButton(p, LV_SYMBOL_NEXT, 76, 26, 64, 34, [](lv_event_t *) {
         blecomp::sendMusicCmd("next");
     }, nullptr);
 
+    // Mode row: SHUF | REP | QUEUE
+    mkButton(p, "shuf", -74, 62, 66, 24, [](lv_event_t *) {
+        blecomp::toggleShuffle();
+        updateMediaUI();
+    }, &lblMediaShuf);
+    mkButton(p, "rep:0", 0, 62, 68, 24, [](lv_event_t *) {
+        blecomp::toggleRepeat();
+        updateMediaUI();
+    }, &lblMediaRep);
+    mkButton(p, "queue", 74, 62, 66, 24, [](lv_event_t *) {
+        if (boxMediaQueue) {
+            lv_obj_remove_flag(boxMediaQueue, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(boxMediaQueue);
+        }
+    }, nullptr);
+
     // Volume row centered cleanly between bottom < and > nav buttons
-    mkButton(p, "vol -", -38, 94, 66, 26, [](lv_event_t *) {
+    mkButton(p, "vol -", -36, 94, 64, 24, [](lv_event_t *) {
         blecomp::sendMusicCmd("volumedown");
     }, nullptr);
-    mkButton(p, "vol +", 38, 94, 66, 26, [](lv_event_t *) {
+    mkButton(p, "vol +", 36, 94, 64, 24, [](lv_event_t *) {
         blecomp::sendMusicCmd("volumeup");
     }, nullptr);
+
+    // Queue / Playlist Browse overlay (hidden by default)
+    boxMediaQueue = lv_obj_create(p);
+    lv_obj_set_size(boxMediaQueue, 224, 206);
+    lv_obj_align(boxMediaQueue, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(boxMediaQueue, colBg(), 0);
+    lv_obj_set_style_border_width(boxMediaQueue, 2, 0);
+    lv_obj_set_style_border_color(boxMediaQueue, colAccent(), 0);
+    lv_obj_set_style_radius(boxMediaQueue, 0, 0);
+    lv_obj_set_style_pad_all(boxMediaQueue, 6, 0);
+    lv_obj_set_flex_flow(boxMediaQueue, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(boxMediaQueue, 4, 0);
+    lv_obj_set_scrollbar_mode(boxMediaQueue, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_flag(boxMediaQueue, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *qHdr = lv_obj_create(boxMediaQueue);
+    lv_obj_set_size(qHdr, 208, 22);
+    lv_obj_set_style_bg_opa(qHdr, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(qHdr, 0, 0);
+    lv_obj_set_style_pad_all(qHdr, 0, 0);
+    lv_obj_set_flex_flow(qHdr, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(qHdr, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *qt = lv_label_create(qHdr);
+    lv_label_set_text(qt, "QUEUE / PLAYLIST");
+    lv_obj_set_style_text_font(qt, FONT_XS, 0);
+    lv_obj_set_style_text_color(qt, colAccent(), 0);
+    mkButton(qHdr, "close", 0, 0, 52, 20, [](lv_event_t *) {
+        if (boxMediaQueue) lv_obj_add_flag(boxMediaQueue, LV_OBJ_FLAG_HIDDEN);
+    }, nullptr);
+
+    for (int i = 0; i < 6; i++) {
+        mkButton(boxMediaQueue, "-", 0, 0, 208, 24, [](lv_event_t *e) {
+            int idx = (int)(intptr_t)lv_event_get_user_data(e);
+            if (idx < blecomp::queueCount()) {
+                blecomp::sendQueuePlay(idx);
+                if (boxMediaQueue) lv_obj_add_flag(boxMediaQueue, LV_OBJ_FLAG_HIDDEN);
+                instance.vibrator();
+            }
+        }, &lblMediaQueue[i]);
+        lv_obj_set_user_data(lv_obj_get_parent(lblMediaQueue[i]), (void *)(intptr_t)i);
+        lv_label_set_long_mode(lblMediaQueue[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(lblMediaQueue[i], 196);
+    }
 }
 
 static void buildNav(lv_obj_t *scr)
@@ -1064,27 +1127,33 @@ static void buildSettings(lv_obj_t *scr)
 
     char tbuf[40];
     snprintf(tbuf, sizeof(tbuf), "scheme: %s  [pick]", PALETTES[cfgPalette].name);
-    mkButton(p, tbuf, 0, 0, 216, 30, [](lv_event_t *) {
+    mkButton(p, tbuf, 0, 0, 216, 26, [](lv_event_t *) {
         showScreen(SC_THEMES);
     }, nullptr);
 
     lv_obj_t *rrow = lv_obj_create(p);
-    lv_obj_set_size(rrow, 216, 30);
+    lv_obj_set_size(rrow, 216, 28);
     lv_obj_set_style_bg_opa(rrow, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(rrow, 0, 0);
     lv_obj_set_style_pad_all(rrow, 0, 0);
     lv_obj_set_flex_flow(rrow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(rrow, 6, 0);
+    lv_obj_set_style_pad_column(rrow, 4, 0);
 
-    char bleLbl[20], meshLbl[20];
-    snprintf(bleLbl,  sizeof(bleLbl),  "ble: %s",  blecomp::enabled() ? "ON" : "OFF");
-    snprintf(meshLbl, sizeof(meshLbl), "mesh: %s", meshsvc::enabled() ? "ON" : "OFF");
-    mkButton(rrow, bleLbl, 0, 0, 105, 28, [](lv_event_t *) {
+    char bleLbl[16], meshLbl[16], wrLbl[16];
+    snprintf(bleLbl,  sizeof(bleLbl),  "ble:%s",  blecomp::enabled() ? "ON" : "OFF");
+    snprintf(meshLbl, sizeof(meshLbl), "mesh:%s", meshsvc::enabled() ? "ON" : "OFF");
+    snprintf(wrLbl,   sizeof(wrLbl),   "wrst:%s", cfgWristCtrl       ? "ON" : "OFF");
+    mkButton(rrow, bleLbl, 0, 0, 69, 26, [](lv_event_t *) {
         blecomp::setEnabled(!blecomp::enabled());
         buildUI();
     }, nullptr);
-    mkButton(rrow, meshLbl, 0, 0, 105, 28, [](lv_event_t *) {
+    mkButton(rrow, meshLbl, 0, 0, 69, 26, [](lv_event_t *) {
         meshsvc::setEnabled(!meshsvc::enabled());
+        buildUI();
+    }, nullptr);
+    mkButton(rrow, wrLbl, 0, 0, 70, 26, [](lv_event_t *) {
+        cfgWristCtrl = !cfgWristCtrl;
+        prefs.putBool("wrist", cfgWristCtrl);
         buildUI();
     }, nullptr);
 
@@ -1188,6 +1257,27 @@ static void updateMediaUI()
     }
     if (lblMediaPlay) {
         lv_label_set_text(lblMediaPlay, playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+    }
+    if (lblMediaShuf) {
+        bool sh = blecomp::musicShuffle();
+        lv_label_set_text(lblMediaShuf, sh ? "shuf:ON" : "shuf");
+        lv_obj_set_style_text_color(lblMediaShuf, sh ? colAccent() : colText(), 0);
+    }
+    if (lblMediaRep) {
+        int rp = blecomp::musicRepeat();
+        lv_label_set_text(lblMediaRep, rp == 2 ? "rep:1" : (rp == 1 ? "rep:ALL" : "rep:OFF"));
+        lv_obj_set_style_text_color(lblMediaRep, rp > 0 ? colAccent() : colText(), 0);
+    }
+    int qc = blecomp::queueCount();
+    for (int i = 0; i < 6; i++) {
+        if (!lblMediaQueue[i]) continue;
+        if (i < qc) {
+            lv_label_set_text_fmt(lblMediaQueue[i], "%d. %s", i + 1, blecomp::queueItem(i));
+            lv_obj_set_style_text_color(lblMediaQueue[i], colText(), 0);
+        } else {
+            lv_label_set_text(lblMediaQueue[i], i == 0 ? "(queue empty)" : "-");
+            lv_obj_set_style_text_color(lblMediaQueue[i], colMuted(), 0);
+        }
     }
 }
 
@@ -1562,6 +1652,10 @@ static void handleSerial()
                         updateMediaUI();
                         updateWatchLinkUI();
                     }
+                } else if (serialBuf.startsWith("QLIST ")) {
+                    blecomp::setQueueLocal(serialBuf.substring(6).c_str());
+                    updateMediaUI();
+                    Serial.println("[media] queue updated");
                 } else if (serialBuf.startsWith("NAV ")) {
                     String rest = serialBuf.substring(4);
                     if (rest == "stop" || rest == "clear") {
@@ -1806,9 +1900,10 @@ void setup()
             PALETTES[1].accent  = prefs.getUInt("oacc",  PALETTES[1].accent);
         }
     }
-    cfgPalette  = prefs.getInt("palette", 0);
-    cfgBright   = prefs.getInt("bright", cfgBright);
-    cfgTimeoutS = prefs.getInt("timeout", cfgTimeoutS);
+    cfgPalette   = prefs.getInt("palette", 0);
+    cfgBright    = prefs.getInt("bright", cfgBright);
+    cfgTimeoutS  = prefs.getInt("timeout", cfgTimeoutS);
+    cfgWristCtrl = prefs.getBool("wrist", true);
     {
         int tzStored = prefs.getInt("tz", cfgTzOffsetMin);
         cfgTzOffsetMin = (tzStored > -15 && tzStored < 15) ? tzStored * 60 : tzStored;
@@ -1837,7 +1932,9 @@ void setup()
 
     instance.bma423.selectPlatform(SensorBMA423::Platform::WRISTBAND);
     instance.bma423.enableTiltDetector(true, true, InterruptPinMap::PIN1);
-    gTiltSeen = instance.getRuntimeStatus().tiltEvents;
+    instance.bma423.enableTapDetector(true, true, InterruptPinMap::PIN1);
+    gTiltSeen      = instance.getRuntimeStatus().tiltEvents;
+    gDoubleTapSeen = instance.getRuntimeStatus().doubleTaps;
 }
 
 void loop()
@@ -1893,11 +1990,33 @@ void loop()
 
     if (!deepOff) pollSwipe();
 
-    // Wrist raise wakes display cleanly (no Matrix rain overhead)
-    uint32_t tilts = instance.getRuntimeStatus().tiltEvents;
-    if (tilts != gTiltSeen) {
-        gTiltSeen = tilts;
-        wakeScreen();
+    // Wrist-On Control (BMA423 tilt wake + double-tap/flick action, gated by gRideMode on SC_NAV)
+    BMASensorRuntimeStatus_t bma = instance.getRuntimeStatus();
+    if (bma.tiltEvents != gTiltSeen) {
+        gTiltSeen = bma.tiltEvents;
+        if (cfgWristCtrl) wakeScreen();
+    }
+    if (bma.doubleTaps != gDoubleTapSeen) {
+        gDoubleTapSeen = bma.doubleTaps;
+        if (cfgWristCtrl && !(gRideMode && curScreen == SC_NAV) && (now - gLastGestureMs > 1200)) {
+            gLastGestureMs = now;
+            if (curScreen == SC_MEDIA) {
+                blecomp::sendMusicCmd("next");
+                instance.vibrator();
+            } else if (curScreen == SC_NOTIF) {
+                char s[20], t[36], b[80];
+                long id = 0; bool rep = false;
+                blecomp::latestNotif(s, sizeof(s), t, sizeof(t), b, sizeof(b), &id, &rep);
+                blecomp::sendNotifDismiss(id);
+                blecomp::clearUnread();
+                instance.vibrator();
+            } else {
+                wakeScreen();
+                blecomp::sendMusicCmd(blecomp::musicPlaying() ? "pause" : "play");
+                updateMediaUI();
+                instance.vibrator();
+            }
+        }
     }
 
     // Direct battery-first idle ladder: dim at timeout -> panel sleep + 80MHz at 2x timeout
