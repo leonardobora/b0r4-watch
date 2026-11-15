@@ -641,21 +641,25 @@ static void buildMedia(lv_obj_t *scr)
         blecomp::sendMusicCmd("next");
     }, nullptr);
 
-    // Mode row: SHUF | REP | QUEUE
-    mkButton(p, "shuf", -74, 62, 66, 24, [](lv_event_t *) {
+    // Mode row: SHUF | REP | QUEUE (LVGL built-in symbols)
+    mkButton(p, LV_SYMBOL_SHUFFLE, -74, 62, 66, 24, [](lv_event_t *) {
         blecomp::toggleShuffle();
         updateMediaUI();
     }, &lblMediaShuf);
-    mkButton(p, "rep:0", 0, 62, 68, 24, [](lv_event_t *) {
+    if (lblMediaShuf) lv_obj_set_style_text_font(lblMediaShuf, FONT_S, 0);
+    mkButton(p, LV_SYMBOL_LOOP, 0, 62, 68, 24, [](lv_event_t *) {
         blecomp::toggleRepeat();
         updateMediaUI();
     }, &lblMediaRep);
-    mkButton(p, "queue", 74, 62, 66, 24, [](lv_event_t *) {
+    if (lblMediaRep) lv_obj_set_style_text_font(lblMediaRep, FONT_S, 0);
+    lv_obj_t *lblQueueBtn = nullptr;
+    mkButton(p, LV_SYMBOL_LIST, 74, 62, 66, 24, [](lv_event_t *) {
         if (boxMediaQueue) {
             lv_obj_remove_flag(boxMediaQueue, LV_OBJ_FLAG_HIDDEN);
             lv_obj_move_foreground(boxMediaQueue);
         }
-    }, nullptr);
+    }, &lblQueueBtn);
+    if (lblQueueBtn) lv_obj_set_style_text_font(lblQueueBtn, FONT_S, 0);
 
     // Volume row centered cleanly between bottom < and > nav buttons
     mkButton(p, "vol -", -36, 94, 64, 24, [](lv_event_t *) {
@@ -1260,13 +1264,13 @@ static void updateMediaUI()
     }
     if (lblMediaShuf) {
         bool sh = blecomp::musicShuffle();
-        lv_label_set_text(lblMediaShuf, sh ? "shuf:ON" : "shuf");
-        lv_obj_set_style_text_color(lblMediaShuf, sh ? colAccent() : colText(), 0);
+        lv_label_set_text(lblMediaShuf, LV_SYMBOL_SHUFFLE);
+        lv_obj_set_style_text_color(lblMediaShuf, sh ? colAccent() : colMuted(), 0);
     }
     if (lblMediaRep) {
         int rp = blecomp::musicRepeat();
-        lv_label_set_text(lblMediaRep, rp == 2 ? "rep:1" : (rp == 1 ? "rep:ALL" : "rep:OFF"));
-        lv_obj_set_style_text_color(lblMediaRep, rp > 0 ? colAccent() : colText(), 0);
+        lv_label_set_text(lblMediaRep, rp == 2 ? (LV_SYMBOL_LOOP " 1") : (rp == 1 ? (LV_SYMBOL_LOOP " A") : LV_SYMBOL_LOOP));
+        lv_obj_set_style_text_color(lblMediaRep, rp > 0 ? colAccent() : colMuted(), 0);
     }
     int qc = blecomp::queueCount();
     for (int i = 0; i < 6; i++) {
@@ -1998,7 +2002,7 @@ void loop()
     }
     if (bma.doubleTaps != gDoubleTapSeen) {
         gDoubleTapSeen = bma.doubleTaps;
-        if (cfgWristCtrl && !(gRideMode && curScreen == SC_NAV) && (now - gLastGestureMs > 1200)) {
+        if (cfgWristCtrl && !deepOff && !(gRideMode && curScreen == SC_NAV) && (now - gLastGestureMs > 1200)) {
             gLastGestureMs = now;
             if (curScreen == SC_MEDIA) {
                 blecomp::sendMusicCmd("next");
