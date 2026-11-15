@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""
+twatch-pc-ble — Lightweight BlueZ D-Bus Companion Bridge (bora-omarchy <-> T-Watch S3).
+
+Zero pip dependencies (uses systemd busctl + gdbus + wpctl over D-Bus):
+  1. Finds 'Bangle.js oma' (98:C3:77:AC:23:99) NUS RX/TX GATT characteristics.
+  2. Syncs wall clock + timezone + active Omarchy theme over BLE on connect.
+  3. Streams active MPRIS track metadata (Title, Artist, Album, Play/Pause) to SC_MEDIA!
+  4. Subscribes to Watch -> PC BLE NUS notifications:
+       - "play" / "pause" / "next" / "previous" -> controls active MPRIS player
+       - "volumeup" / "volumedown"              -> adjusts PipeWire sink volume via wpctl
+       - "findPhone" ("ping")                   -> pops a desktop notification on Omarchy
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import pathlib
+import re
+import select
+import subprocess
+import sys
+import time
+
+HOME = pathlib.Path.home()
+WATCH_DEV_PATH = "/org/bluez/hci0/dev_98_C3_77_AC_23_99"
+WATCH_MAC = "98:C3:77:AC:23:99"
+NUS_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+NUS_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+
+
+def _hypr_env() -> dict[str, str]:
+    env = dict(os.environ)
+    if not env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        m = sorted(glob.glob(f"/run/user/{os.getuid()}/hypr/*"))
+        if m:
+            env["HYPRLAND_INSTANCE_SIGNATURE"] = os.path.basename(m[0])
+    if not env.get("WAYLAND_DISPLAY"):
+        wl = [w for w in sorted(glob.glob(f"/run/user/{os.getuid()}/wayland-*")) if not w.endswith(".lock")]
+        if wl:
+            env["WAYLAND_DISPLAY"] = os.path.basename(wl[0])
+    return env
+
+
+def notify(title: str, body: str) -> None:
+    subprocess.run(["notify-send", title, body], env=_hypr_env(), check=False)
+
+
+def is_ble_connected() -> bool:
+    r = subprocess.run(
+        ["busctl", "get-property", "org.bluez", WATCH_DEV_PATH, "org.bluez.Device1", "Connected"],
+        capture_output=True,
+        text=True,
+    )
+    return "true" in r.stdout
+
+
+def find_gatt_char(target_uuid: str) -> str | None:
+    r = subprocess.run(["busctl", "tree", "--list", "org.bluez"], capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        path = line.strip()
+        if path.startswith(WATCH_DEV_PATH + "/service") and "/char" in path and "/desc" not in path:
+            u = subprocess.run(
+                ["busctl", "get-property", "org.bluez", path, "org.bluez.GattCharacteristic1", "UUID"],
+                capture_output=True,
+                text=True,
+            ).stdout
+            if target_uuid.lower() in u.lower():
+                return path
+    return None
+
+
+def ble_write_line(line: str) -> bool:
+    rx_path = find_gatt_char(NUS_RX_UUID)
+    if not rx_path or not is_ble_connected():
+        return False
+    if not line.endswith("\n"):
+        line += "\n"
+    data = line.encode("utf-8")
+    for off in range(0, len(data), 120):
+        chunk = data[off : off + 120]
+        byte_args = [str(len(chunk))] + [str(b) for b in chunk]
+        r = subprocess.run(
+            [
+                "busctl",
+                "call",
+                "org.bluez",
+                rx_path,
+                "org.bluez.GattCharacteristic1",
+                "WriteValue",
+                "aya{sv}",
+                *byte_args,
+                "1",
+                "type",
+                "s",
+                "command",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            return False
+    return True
+
+
+def build_theme_cmd() -> str | None:
+    colors_path = HOME / ".local" / "state" / "omarchy" / "current" / "theme" / "colors.toml"
+    theme_f = HOME / ".local" / "state" / "omarchy" / "current" / "theme.name"
+    if not colors_path.is_file():
+        return None
+    theme_name = theme_f.read_text().strip() if theme_f.is_file() else "Omarchy"
+    vals: dict[str, str] = {}
+    for line in colors_path.read_text().splitlines():
+        m = re.match(r'^\s*([a-z_]+)\s*=\s*"#([0-9a-fA-F]{6})"', line)
+        if m:
+            vals[m.group(1)] = m.group(2).upper()
+    bg = vals.get("darker_background") or vals.get("dark_background") or vals.get("background", "181D20")
+    surf = vals.get("background", "2D353B")
+    txt = vals.get("foreground", "D3C6AA")
+    muted = vals.get("muted", "475258")
+    acc = vals.get("accent", "7FBBB3")
+    return f"TH {theme_name}|{bg}|{surf}|{txt}|{muted}|{acc}\n"
+
+
+def active_mpris_players() -> list[str]:
+    r = subprocess.run(["busctl", "--user", "list", "--no-pager"], capture_output=True, text=True)
+    out = []
+    for line in r.stdout.splitlines():
+        col = line.split()[0] if line.strip() else ""
+        if col.startswith("org.mpris.MediaPlayer2."):
+            out.append(col)
+    return out
+
+
+def read_mpris_snapshot() -> tuple[str | None, bool, str, str, str]:
+    players = active_mpris_players()
+    if not players:
+        return None, False, "", "", ""
+    best = players[0]
+    chosen_playing = False
+    for dest in players:
+        st = subprocess.run(
+            ["busctl", "--user", "get-property", dest, "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player", "PlaybackStatus"],
+            capture_output=True, text=True,
+        ).stdout
+        if '"Playing"' in st:
+            best = dest
+            chosen_playing = True
+            break
+    meta = subprocess.run(
+        ["gdbus", "call", "--session", "--dest", best, "--object-path", "/org/mpris/MediaPlayer2",
+         "--method", "org.freedesktop.DBus.Properties.Get", "org.mpris.MediaPlayer2.Player", "Metadata"],
+        capture_output=True, text=True,
+    ).stdout
+    title_m = re.search(r"'xesam:title':\s*<'([^']*)'>", meta) or re.search(r"'xesam:title':\s*<\"([^\"]*)\">", meta)
+    artist_m = re.search(r"'xesam:artist':\s*<\['([^']*)'", meta) or re.search(r"'xesam:artist':\s*<\[\"([^\"]*)\"", meta)
+    album_m = re.search(r"'xesam:album':\s*<'([^']*)'>", meta) or re.search(r"'xesam:album':\s*<\"([^\"]*)\">", meta)
+    app_name = best.replace("org.mpris.MediaPlayer2.", "").split(".")[0].capitalize()
+    title = (title_m.group(1) if title_m else "").strip()[:76]
+    artist = (artist_m.group(1) if artist_m else app_name).strip()[:52]
+    album = (album_m.group(1) if album_m else f"Omarchy | {app_name}").strip()[:52]
+    return best, chosen_playing, title, artist, album
+
+
+def mpris_control(action: str) -> None:
+    if action == "volumeup":
+        subprocess.run(["wpctl", "set-volume", "-l", "1.5", "@DEFAULT_AUDIO_SINK@", "5%+"], check=False)
+        return
+    if action == "volumedown":
+        subprocess.run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"], check=False)
+        return
+    dest, _, _, _, _ = read_mpris_snapshot()
+    if not dest:
+        return
+    method = {"play": "PlayPause", "pause": "PlayPause", "next": "Next", "previous": "Previous"}.get(action, "PlayPause")
+    subprocess.run(
+        ["busctl", "--user", "call", dest, "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player", method],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def clean_ascii(s: str) -> str:
+    s = s.replace("—", "-").replace("–", "-").replace("•", "|").replace("·", "|").replace('"', "'")
+    return "".join(ch if 0x20 <= ord(ch) <= 0x7E else "" for ch in s)
+
+
+def sync_mpris_to_watch(last_sig: str) -> str:
+    dest, playing, title, artist, album = read_mpris_snapshot()
+    if not dest or not title:
+        return last_sig
+    sig = f"{playing}|{title}|{artist}|{album}"
+    if sig != last_sig:
+        info = {
+            "t": "musicinfo",
+            "artist": clean_ascii(artist),
+            "track": clean_ascii(title),
+            "album": clean_ascii(album),
+        }
+        ble_write_line(f"GB({json.dumps(info, separators=(',', ':'))})")
+        st = {"t": "musicstate", "state": "play" if playing else "pause"}
+        ble_write_line(f"GB({json.dumps(st, separators=(',', ':'))})")
+        return sig
+    return last_sig
+
+
+def handle_watch_json(raw: str) -> None:
+    raw = raw.strip()
+    if not raw.startswith("{"):
+        return
+    try:
+        msg = json.loads(raw)
+    except Exception:
+        return
+    t = msg.get("t")
+    if t == "findPhone" and msg.get("n"):
+        notify("⌚ T-Watch S3 Ping!", "Ping received from your wrist over Bluetooth LE")
+    elif t == "music":
+        mpris_control(str(msg.get("n") or "play"))
+
+
+def run_daemon() -> int:
+    was_connected = False
+    monitor_proc: subprocess.Popen | None = None
+    rx_buf = ""
+    last_media_sig = ""
+    last_media_poll = 0.0
+
+    while True:
+        conn = is_ble_connected()
+        if not conn:
+            was_connected = False
+            last_media_sig = ""
+            if monitor_proc and monitor_proc.poll() is None:
+                monitor_proc.terminate()
+                monitor_proc = None
+            subprocess.run(["bluetoothctl", "connect", WATCH_MAC], capture_output=True, timeout=6, check=False)
+            time.sleep(8)
+            continue
+
+        tx_path = find_gatt_char(NUS_TX_UUID)
+        if not tx_path:
+            time.sleep(3)
+            continue
+
+        if not was_connected:
+            was_connected = True
+            now = int(time.time())
+            tz_hr = time.localtime().tm_gmtoff / 3600.0
+            ble_write_line(f"setTime({now});E.setTimeZone({tz_hr:.2f})")
+            ble_write_line("NAME Omarchy PC")
+            tcmd = build_theme_cmd()
+            if tcmd:
+                ble_write_line(tcmd)
+            subprocess.run(
+                ["busctl", "call", "org.bluez", tx_path, "org.bluez.GattCharacteristic1", "StartNotify"],
+                capture_output=True,
+                check=False,
+            )
+            monitor_proc = subprocess.Popen(
+                ["gdbus", "monitor", "--system", "--dest", "org.bluez", "--object-path", tx_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+
+        now_f = time.time()
+        if now_f - last_media_poll >= 2.5:
+            last_media_poll = now_f
+            last_media_sig = sync_mpris_to_watch(last_media_sig)
+
+        if monitor_proc and monitor_proc.stdout:
+            r, _, _ = select.select([monitor_proc.stdout], [], [], 1.5)
+            if r:
+                line = monitor_proc.stdout.readline()
+                if not line:
+                    monitor_proc = None
+                    continue
+                if "Value" in line and "[" in line and "]" in line:
+                    m = re.search(r"\[([0-9a-fx,\s]+)\]", line)
+                    if m:
+                        bs = bytes(int(x.strip(), 0) for x in m.group(1).split(",") if x.strip())
+                        rx_buf += bs.decode("utf-8", "replace")
+                        while "\n" in rx_buf:
+                            one, rx_buf = rx_buf.split("\n", 1)
+                            handle_watch_json(one)
+                            last_media_poll = 0.0
+        else:
+            time.sleep(1.5)
+
+
+def main() -> int:
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1]
+        if cmd == "send" and len(sys.argv) > 2:
+            ok = ble_write_line(sys.argv[2])
+            print("BLE_OK" if ok else "BLE_UNAVAILABLE")
+            return 0 if ok else 1
+        if cmd == "ping":
+            ok = ble_write_line('GB({"t":"notify","src":"Omarchy","title":"BORA Hub","body":"PC BLE connected"})')
+            print("BLE_OK" if ok else "BLE_UNAVAILABLE")
+            return 0 if ok else 1
+        if cmd == "sync-theme":
+            tcmd = build_theme_cmd()
+            ok = bool(tcmd and ble_write_line(tcmd))
+            print("BLE_OK" if ok else "BLE_UNAVAILABLE")
+            return 0 if ok else 1
+    return run_daemon()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

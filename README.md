@@ -8,8 +8,8 @@
   <a href="https://github.com/leonardobora/b0r4-watch/issues"><img src="https://img.shields.io/github/issues/leonardobora/b0r4-watch" alt="Issues"></a>
   <a href="https://github.com/leonardobora/b0r4-watch/pulls"><img src="https://img.shields.io/github/issues-pr/leonardobora/b0r4-watch" alt="Pull Requests"></a>
   <a href="https://github.com/leonardobora/b0r4-watch/commits"><img src="https://img.shields.io/github/last-commit/leonardobora/b0r4-watch" alt="Last Commit"></a>
-  <a href="https://img.shields.io/github/languages/top/leonardobora/b0r4-watch"><img src="https://img.shields.io/github/languages/top/leonardobora/b0r4-watch" alt="Top Language"></a>
-  <a href="https://img.shields.io/github/repo-size/leonardobora/b0r4-watch"><img src="https://img.shields.io/github/repo-size/leonardobora/b0r4-watch" alt="Repo Size"></a>
+  <a href="https://github.com/leonardobora/b0r4-watch/languages/top/leonardobora/b0r4-watch"><img src="https://img.shields.io/github/languages/top/leonardobora/b0r4-watch" alt="Top Language"></a>
+  <a href="https://github.com/leonardobora/b0r4-watch/repo-size"><img src="https://img.shields.io/github/repo-size/leonardobora/b0r4-watch" alt="Repo Size"></a>
 </p>
 
 <p align="center">
@@ -19,278 +19,126 @@
 </p>
 
 <p align="center">
-  <b>Um smartwatch pessoal de código aberto, construído do zero no LILYGO T-Watch S3.</b><br>
-  <sub>Firmware ESP32/LVGL no pulso + servidor-agente Python (FastAPI) com IA de voz, música e automação de casa.</sub>
+  <b>Smartwatch pessoal open-source no LILYGO T-Watch S3 — UI Omarchy, BLE multi-central, Apple AMS/ANCS, Gadgetbridge + Ride HUD.</b><br>
+  <sub>Firmware ESP32-S3 + LVGL 9 (<code>firmware/</code>) + bridges sem dependências para Linux/Omarchy e Android/Termux (<code>companion/</code>).</sub>
 </p>
 
 ---
 
-## O que é isso? (para todo mundo)
+## O que é isso?
 
-Um **smartwatch que você mesmo constrói e programa**. Em vez de comprar um relógio pronto com um sistema fechado, este projeto usa uma placa de hardware aberta chamada **LILYGO T-Watch S3** — um pequeno computador com tela touch, acelerômetro, microfone, Bluetooth, Wi-Fi e rádio LoRa — e um software escrito aqui mesmo, em duas partes que conversam entre si:
+Um **smartwatch open-source** construído no **LILYGO T-Watch S3** (ESP32-S3, tela touch ST7789 240×240, acelerômetro BMA423, PMU AXP2101, rádio LoRa SX1262, microfone PDM I2S e vibrador háptico):
 
-1. **O "cérebro" do relógio** (`firmware/`) — o programa que roda na placa e controla a tela, os sensores e o que aparece no pulso.
-2. **Um "assistente" em casa** (`server/`) — um programa Python que roda no seu computador ou servidor e dá poderes extras ao relógio: entender sua voz, tocar música, controlar luzes e responder perguntas com IA.
+1. **`firmware/`** — Firmware minimalista em **PlatformIO + LVGL 9.6 + NimBLE 2.5**, com cantos quadrados (`radius=0`), **8 paletas de cor** (incluindo sync ao vivo com temas do Omarchy Linux), gerenciamento real de energia (Wi-Fi `OFF` em idle, CPU a `80 MHz` + backlight boost off no deep-idle, botão lateral AXP2101 PEKEY) e **BLE multi-central** (`Bangle.js oma`) conectando simultaneamente ao **iPhone**, **Android** e **PC Linux**.
+2. **`companion/`** — Bridges leves para **Linux (`twatch-pc-ble`)** via BlueZ D-Bus + MPRIS e **Android/Termux (`twatch_s21_bridge.py`)** coexistindo com o **Gadgetbridge**.
+3. **`server/`** — Protótipo inicial em FastAPI (`ASR → LLM → TTS` via WebSocket), mantido como referência para a futura etapa de ditado de voz local.
 
-No estado atual, o relógio **já exibe um rosto animado (avatar) na tela**, e o servidor **já roda um assistente de voz completo** (ouvir → pensar → responder em áudio). O resto — notificações do iPhone, música, automação de casa, rádio LoRa — está planejado e documentado nos próximos passos.
-
-> Tudo aqui é **aberto e feito à mão**: sem apps proprietários, sem nuvem obrigatória, sem caixa-preta. Ideal para aprender, hackear e personalizar.
+> Tudo aqui é **local-first**, sem nuvem obrigatória, sem app proprietário de fabricante.
 
 ---
 
 ## Funcionalidades
 
-Status: ✅ **Implementado** · 🚧 **Em andamento** · 📐 **Projetado (documentado)** · 🔮 **Futuro**
+Status: ✅ **Implementado** · 🔮 **Backlog**
 
-| Funcionalidade | Para todo mundo | Detalhe técnico | Status |
+| Funcionalidade | O que faz | Detalhe técnico | Status |
 |---|---|---|---|
-| **Avatar animado** | Um rostinho ASCII que pisca, respira e muda de emoção na tela | Sistema `Avatar` em LVGL com 7 emoções, `BlinkModifier` e `BreathModifier`, ~30 FPS | ✅ `firmware/src/avatar/` |
-| **Assistente de voz** | Fale com o relógio: ele transcreve, pensa e responde em áudio | Pipeline `ASR → LLM → TTS` via WebSocket, com providers configuráveis | ✅ `server/` |
-| **Comandos por voz** | "Toca uma música", "apaga a luz da sala", "que horas são" | Tool calls do LLM: `music_play`, `music_next`, `music_pause`, `lights_toggle`, `system_time` | ✅ `server/src/tools.py` |
-| **Controle de música** | Pedir música pelo nome, pular faixa, pausar | Integração com YouTube Music (`ytmusicapi`) + media keys do PC | 🚧 stubs prontos, integração real no roadmap |
-| **Luzes e casa inteligente** | Acender/apagar luzes de um cômodo pela voz | Integração com Home Assistant / ESPHome | 🚧 stub pronto, integração no roadmap |
-| **Sistema de input** | Controlar o relógio com gestos, botão, toque e voz | `GestureEngine` traduz *triggers* (shake, double-click, swipe, wake word) em *actions*, mapeadas em `gestures.json` | 📐 `docs/input-system.md` + ADR 0007 |
-| **Notificações do iPhone** | Alertas do WhatsApp, ligações e apps no pulso | Protocolo ANCS (Apple Notification Center Service) via BLE | 🔮 ADR 0006 |
-| **Rádio LoRa** | Comunicar com outros dispositivos de longa distância, sem internet | Rádio SX1262 915 MHz (faixa Anatel), compatível com Meshtastic | 🔮 ADR 0002 |
-| **Temas e launcher** | Trocar visual da tela e navegar entre apps | UI em LVGL, temas criados no SquareLine Studio | 🔮 roadmap |
-| **GPS** | Localização e tracking | Shield GPS + `TinyGPSPlus` | 🔮 roadmap |
+| **Watch Face Digital** | Relógio 24h, data, bateria, passos e ticker ao vivo (música tocando ou última mensagem) | LVGL 9, cantos retos `radius=0`, 8 paletas + sync de tema Omarchy | ✅ `SC_WATCH` |
+| **Media Player Full-Screen** | Exibe faixa, artista, álbum e controla `PLAY`/`PAUSE`/`NEXT`/`PREV`/`VOL -/+` | Android (`Gadgetbridge`), iPhone (`Apple AMS` nativo), Linux (`MPRIS`) | ✅ `SC_MEDIA` |
+| **Ride Mode & Nav HUD** | Setas vetoriais, distância, rua, ETA, velocidade (`km/h`), chime direcional + bloqueio anti-toque no guidão | Auto-ativa `ride:ON` ao receber `t:"nav"` (Gadgetbridge / OsmAnd / Maps) | ✅ `SC_NAV` |
+| **Mensagens + Quick Reply PT-BR** | Lê notificações e responde mensagens com 1 toque (`OK`, `To indo`, `Ja chego`, `Sim`, `Nao`, `Te ligo`) | Protocolo `{"t":"notify","n":"REPLY",...}` via Gadgetbridge `RemoteInput` | ✅ `SC_NOTIF` |
+| **iPhone 13 Nativo (BLE)** | Música + notificações + chamadas sem app no iPhone | Cliente GATT **Apple AMS + ANCS** + pairing/bonding Secure Connections | ✅ `ble_companion.cpp` |
+| **BLE Multi-Central + Manager** | Conecta múltiplos hosts ao mesmo tempo e permite parear/desparear pela tela | NimBLE NUS (`Bangle.js oma`) + GAP `0x1800/0x2A00` + cache NVS | ✅ `SC_BLE` |
+| **Linux / Omarchy Bridge** | Sincroniza relógio, tema do sistema e MPRIS sem `bleak`/`pydbus` | `companion/linux/twatch-pc-ble` via `busctl` + `gdbus` + `wpctl` | ✅ `companion/linux/` |
+| **Energia & Botão Lateral** | Tela + `ALDO2` off, `80 MHz` em idle, `wakeShield` anti-toque, botão PEKEY (curto=home/sleep, longo=play/pause) | PMU AXP2101 + gating de rails (`GPS`/`RADIO`/`SPEAK`) | ✅ `main.cpp` |
+| **Rádio LoRa SX1262** | Comunicação 915 MHz estilo Meshtastic (desligado por padrão para poupar bateria) | `mesh_radio.cpp` + `mesh_service.cpp` | ✅ `SC_MESH` |
+| **Ditado de Voz Local** | Gravar áudio no mic PDM e transcrever local via `whisper.cpp` (S21 / hub) para responder mensagens | Captura I2S + `whisper.cpp` offline | 🔮 Backlog |
 
 ---
 
 ## Arquitetura
 
-Duas pernas independentes que conversam por WebSocket:
-
 ```mermaid
 flowchart LR
-    subgraph WATCH["Relógio — T-Watch S3 (ESP32-S3)"]
-        FW["Firmware<br/>Arduino + PlatformIO + LVGL"]
-        AV["Avatar ASCII"]
-        IN["Input<br/>Gestos · Botão · Touch · Voz"]
-        BLE["BLE · Wi-Fi · LoRa"]
+    subgraph WATCH["T-Watch S3 (ESP32-S3 · NimBLE Multi-Central)"]
+        UI["LVGL 9 UI (10 telas)<br/>WATCH · MEDIA · NAV · MSGS · BLE"]
+        NUS["BLE NUS Server<br/>'Bangle.js oma'"]
+        APPLE["BLE GATT Client<br/>Apple AMS + ANCS"]
+        PWR["AXP2101 PMU<br/>80 MHz idle · ALDO2 off"]
     end
 
-    subgraph SERVER["Servidor — Python (FastAPI)"]
-        API["WebSocket /ws/audio"]
-        AI["ASR → LLM → TTS"]
-        TOOLS["Tools<br/>Música · Luzes · Hora"]
+    subgraph IPHONE["iPhone 13 (iOS)"]
+        AMS["Apple Media Service"]
+        ANCS["Apple Notification Center"]
     end
 
-    subgraph EXT["Serviços externos"]
-        OPENAI["OpenAI<br/>Whisper · GPT · TTS"]
-        EDGE["Edge TTS<br/>(gratuito)"]
-        YT["YouTube Music"]
-        HA["Home Assistant"]
-        IPHONE["iPhone<br/>(ANCS)"]
+    subgraph S21["Galaxy S21 (Android)"]
+        GB["Gadgetbridge<br/>Media · Nav · Quick Reply"]
+        MAPS["OsmAnd / Google Maps"]
     end
 
-    FW --> AV
-    IN --> FW
-    FW --> BLE
-    BLE <-->|"WebSocket<br/>/ws/audio"| API
-    API --> AI
-    API --> TOOLS
-    AI <--> OPENAI
-    AI <--> EDGE
-    TOOLS <--> YT
-    TOOLS <--> HA
-    BLE <-->|"BLE / ANCS"| IPHONE
+    subgraph PC["Linux / Omarchy"]
+        BLEPY["twatch-pc-ble<br/>BlueZ D-Bus + MPRIS"]
+        THEME["Omarchy theme-set hook"]
+    end
+
+    AMS <-->|"BLE Bonded"| APPLE
+    ANCS -->|"BLE Bonded"| APPLE
+    GB <-->|"BLE NUS CRLF"| NUS
+    MAPS --> GB
+    BLEPY <-->|"BLE NUS"| NUS
+    THEME --> BLEPY
 ```
-
-- **`firmware/`** — Arduino + PlatformIO, LVGL, rodando no T-Watch S3 (SX1262 915 MHz). Já compila sem placa: **RAM 7.3% / Flash 21.2%**.
-- **`server/`** — Python (FastAPI + WebSocket + MQTT) para música (ytmusicapi), IA híbrida (ASR/LLM/TTS) e integrações. Pode rodar no mesmo PC ou num servidorzinho em casa.
-- **`docs/`** — ADRs (decisões arquiteturais) e glossário de termos do projeto.
-
-Decisões principais registradas em `docs/adr/`:
-
-| Decisão | Escolha | ADR |
-|---|---|---|
-| Toolchain do firmware | Arduino + PlatformIO (lib oficial `t-watch-s3`) | [0001](docs/adr/0001-toolchain.md) |
-| Variante de hardware | SX1262 915 MHz (Anatel, Meshtastic) | [0002](docs/adr/0002-hardware-variant.md) |
-| Arquitetura | Duas pernas: firmware + servidor reutilizável | [0003](docs/adr/0003-architecture.md) |
-| Estratégia de IA | Híbrido 3 camadas: WakeNet9 + MultiNet + cloud | [0004](docs/adr/0004-ai-strategy.md) |
-| Energia | BLE ativo, Wi-Fi sob demanda, deep sleep | [0005](docs/adr/0005-energy.md) |
-| Notificações | Somente ANCS via BLE do iPhone | [0006](docs/adr/0006-notifications.md) |
-| Sistema de input | Gestos + botão + touch + voz, sem always-on | [0007](docs/adr/0007-input-system.md) |
-| Avatar | Rosto ASCII em LVGL, leve e extensível | [0008](docs/adr/0008-avatar.md) |
-
----
-
-## Como o assistente de voz funciona
-
-O relógio grava sua voz, envia pela rede e o servidor devolve a resposta falada:
-
-```mermaid
-sequenceDiagram
-    participant R as Relógio (firmware)
-    participant S as Servidor (FastAPI)
-    participant ASR as ASR (Whisper)
-    participant LLM as LLM (GPT)
-    participant TTS as TTS (Edge/OpenAI)
-    participant T as Tools (música/luzes)
-
-    R->>S: conecta em /ws/audio
-    R->>S: {"type": "start"}
-    R-->>S: áudio PCM 16 kHz (bytes)
-    R->>S: {"type": "end"}
-    S->>ASR: transcreve o áudio
-    ASR-->>S: texto do usuário
-    S->>LLM: "qual a intenção?"
-    LLM->>T: chama tool (ex.: music_play)
-    T-->>LLM: resultado
-    LLM-->>S: resposta + tool calls
-    S-->>R: {"type": "text", ...}
-    S->>TTS: transforma texto em voz
-    TTS-->>S: áudio
-    S-->>R: {"type": "audio"} + bytes
-```
-
-**Providers configuráveis** (via `.env`, sem recompilar):
-
-| Etapa | Providers | Padrão |
-|---|---|---|
-| ASR | `openai` (Whisper), `mock` | `mock` |
-| LLM | `openai` (GPT), `mock` | `mock` |
-| TTS | `openai`, `edge_tts` (gratuito), `mock` | `mock` |
-
-O modo `mock` permite testar o fluxo inteiro **sem gastar nada** — ideal para desenvolver sem o relógio físico.
-
----
-
-## Como você controla o relógio
-
-O sistema de input foi desenhado para ser **econômico e intencional** — nada de sensores "sempre ouvindo" que drenam a bateria. O usuário dispara ações com gestos claros:
-
-```mermaid
-flowchart TD
-    subgraph INPUTS["Fontes de input"]
-        ACCEL["BMA423<br/>shake · wrist_tilt · tap"]
-        BUTTON["Botão POWER<br/>1x · 2x · segurar"]
-        TOUCH["Touchscreen<br/>tap · swipes"]
-        VOICE["Voz<br/>wake word · intents"]
-    end
-
-    GE["Gesture Engine<br/>(traduz trigger em action)"]
-    PROFILE["gestures.json<br/>mapa personalizável"]
-    ACTIONS["Actions<br/>local · intent · servidor"]
-
-    ACCEL --> GE
-    BUTTON --> GE
-    TOUCH --> GE
-    VOICE --> GE
-    PROFILE --> GE
-    GE --> ACTIONS
-```
-
-Exemplos do mapeamento de fábrica: levantar o pulso acorda a tela, chacoalhar 2× pro lado abre o assistente, duplo clique no POWER pula a música. O mapa completo vive em `gestures.json` — dá para trocar os atalhos **sem recompilar o firmware** (útil para versões white-label). Veja `docs/input-system.md`.
-
----
-
-## Roadmap
-
-| # | Milestone | Descrição | Status |
-|---|---|---|---|
-| 1 | **Setup (Fase 0)** | Estrutura do projeto, compilar sem placa, avatar ASCII animado | ✅ |
-| 2 | **Bare metal** | Flash, tela, RTC, sleep | 🔮 |
-| 3 | **LVGL launcher + temas** | Menu de apps e temas visuais (SquareLine Studio) | 🔮 |
-| 4 | **ANCS (iPhone)** | Notificações do iPhone via BLE | 🔮 |
-| 5 | **Música** | ytmusicapi + media keys + A2DP | 🔮 |
-| 6 | **Casa** | ESPHome / Home Assistant | 🔮 |
-| 7 | **IA híbrida** | WakeNet9 (sempre ligado) + MultiNet (offline) + cloud | 🔮 |
-| 8 | **Hacker** | IR, LoRa, Wi-Fi scan | 🔮 |
-| 9 | **Futuro** | GPS shield, wake word always-on, TLS | 🔮 |
 
 ---
 
 ## Estrutura do repositório
 
-```
+```text
 b0r4-watch/
-├── firmware/                  # Plataforma T-Watch S3 (Arduino + PlatformIO + LVGL)
+├── firmware/                  # T-Watch S3 (PlatformIO + pioarduino + LVGL 9.6 + NimBLE)
 │   ├── src/
-│   │   ├── avatar/            # sistema de avatar ASCII (7 emoções + modifiers)
-│   │   │   └── modifiers/     # BlinkModifier, BreathModifier
-│   │   └── main.cpp           # entry point + demo do avatar
-│   ├── boards/                # definição da placa LilyGoWatch-S3
+│   │   ├── main.cpp           # UI (10 telas), PMU AXP2101, BMA423, botão PEKEY, serial
+│   │   ├── ble_companion.*    # NimBLE NUS multi-central + Apple AMS/ANCS + PT-BR ASCII
+│   │   ├── hermes_link.*      # Wi-Fi burst (15s STA, 0 mA idle)
+│   │   └── mesh_*             # Rádio LoRa SX1262 (915 MHz)
+│   ├── boards/                # Definição lilygo-t-watch-s3
+│   ├── variants/              # Pinout LilyGO T-Watch S3
+│   ├── partitions.csv
 │   └── platformio.ini
-├── server/                    # Servidor-agente Python (FastAPI + WebSocket + MQTT)
-│   ├── main.py                # endpoints REST + WebSocket /ws/audio
-│   ├── src/
-│   │   ├── asr.py             # reconhecimento de fala (openai | mock)
-│   │   ├── llm.py             # LLM com tool calling (openai | mock)
-│   │   ├── tts.py             # síntese de voz (openai | edge_tts | mock)
-│   │   ├── music.py           # controle de música (ytmusicapi)
-│   │   ├── lights.py          # luzes / Home Assistant
-│   │   └── tools.py           # definição das tools do assistente
-│   └── scripts/test_client.py # teste do pipeline sem o relógio
-└── docs/
-    ├── adr/                   # decisões arquiteturais (0001..0008)
-    ├── CONTEXT.md             # glossário de termos do projeto
-    └── input-system.md        # design do sistema de input
+├── companion/
+│   ├── linux/
+│   │   └── twatch-pc-ble      # Bridge BlueZ D-Bus + MPRIS + Omarchy (zero deps)
+│   └── s21/
+│       ├── twatch_s21_bridge.py
+│       ├── twatch_s21_tui.py
+│       └── install-on-s21.sh
+├── server/                    # Protótipo legado FastAPI (ASR → LLM → TTS)
+└── docs/                      # ADRs e documentação de design
 ```
 
 ---
 
-## Como começar
+## Build & Flash (`firmware/`)
 
-### Firmware
+Requer [PlatformIO](https://platformio.org/):
 
 ```bash
 cd firmware
-pio run
+pio run -t upload --upload-port /dev/ttyACM0
 ```
 
-A primeira execução baixa as dependências (~500 MB) e compila o ESP32 Arduino core. Com o relógio em modo download (segure BOOT, aperte RST, solte BOOT):
-
-```bash
-pio run --target upload
-pio device monitor
-```
-
-### Servidor
-
-```bash
-cd server
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy env.example .env   # preencha as chaves que quiser usar
-uvicorn main:app --reload
-```
-
-O endpoint `/health` responde em http://localhost:8000/health.
-
-### Testar o assistente sem o relógio
-
-```bash
-# terminal 1 — servidor
-uvicorn main:app --reload
-
-# terminal 2 — cliente de teste (envia 1 s de silêncio e mostra a resposta do pipeline)
-python scripts/test_client.py
-```
-
----
-
-## Documentação
-
-- **Decisões arquiteturais:** `docs/adr/` (toolchain, hardware, arquitetura, IA, energia, notificações, input, avatar)
-- **Glossário:** `docs/CONTEXT.md` — termos do projeto em linguagem ubíqua
-- **Sistema de input:** `docs/input-system.md`
-- **Servidor:** `server/README.md` — protocolo WebSocket e providers
-
-## Requisitos
-
-- Python 3.12+
-- PlatformIO Core (`pip install platformio`)
-- VS Code + extensão PlatformIO IDE (recomendado)
-
-## Licença
-
-[MIT](LICENSE)
+Comandos úteis via serial (`115200` baud):
+- `T<epoch>` — ajusta o relógio UTC
+- `TH <name>|<bg>|<surf>|<txt>|<muted>|<acc>` — aplica paleta ao vivo
+- `M0` / `M1` — desliga/liga o rádio LoRa
+- `RIDE 1` / `RIDE 0` — ativa/desativa Ride Mode
+- `SNAP [idx]` — captura screenshot RGB565 da tela atual
 
 ---
 
 ## Sobre o autor
 
-**Leonardo Bora (The Neuromancer)** — desenvolvedor e estudante em Curitiba, Brasil. Construindo o b0r4-watch do zero, do hardware ao software.
+**Leonardo Bora (The Neuromancer)** — desenvolvedor e estudante em Curitiba, Brasil.
+
+Licença: [MIT](LICENSE)

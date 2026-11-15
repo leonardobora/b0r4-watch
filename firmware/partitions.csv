@@ -1,0 +1,8 @@
+# T-Watch S3 badge — single app, OTA-capable, room for local storage.
+# name,     type, subtype,  offset,   size,     flags
+nvs,        data, nvs,      0x9000,   0x5000,
+otadata,    data, ota,      0xE000,   0x2000,
+app0,       app,  ota_0,    0x10000,  0x600000,
+app1,       app,  ota_1,    0x610000, 0x400000,
+ffat,       data, fat,      0xA10000, 0x5E0000,
+coredump,   data, coredump, 0xFF0000, 0x10000,
