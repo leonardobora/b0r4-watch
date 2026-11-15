@@ -17,6 +17,7 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <LittleFS.h>
 #include <WiFi.h>
 #include <esp_mac.h>
 #include <time.h>
@@ -54,6 +55,7 @@ static int  cfgBright      = 160;
 static int  cfgTimeoutS    = 15;
 static int  cfgTzOffsetMin = -180;  // UTC-03 (Brazil)
 static bool cfgWristCtrl   = true;
+static bool cfgLockScreen  = true;
 static Preferences prefs;
 
 static inline lv_color_t colBg()      { return lv_color_hex(PALETTES[cfgPalette].bg); }
@@ -72,8 +74,10 @@ enum Screen {
     SC_BLE,
     SC_THEMES,
     SC_STEPS,
+    SC_TIMER,
     SC_MESH,
     SC_SETTINGS,
+    SC_LOCK,
     SC_COUNT
 };
 
@@ -86,8 +90,10 @@ static const bool kSwipeOk[SC_COUNT] = {
     true,   // SC_BLE
     true,   // SC_THEMES
     true,   // SC_STEPS
+    true,   // SC_TIMER
     true,   // SC_MESH
     false,  // SC_SETTINGS (sliders)
+    false,  // SC_LOCK (slide to unlock)
 };
 
 static lv_obj_t *screens[SC_COUNT] = {};
@@ -98,7 +104,25 @@ static lv_obj_t *lblLinkFace = nullptr, *lblDate = nullptr, *lblTime = nullptr, 
 static lv_obj_t *lblBattery = nullptr, *barBattery = nullptr, *lblStepsFace = nullptr;
 static lv_obj_t *lblMediaState = nullptr, *lblMediaTrack = nullptr, *lblMediaArtist = nullptr;
 static lv_obj_t *lblMediaAlbum = nullptr, *boxMediaCard = nullptr, *btnMediaPlay = nullptr, *lblMediaPlay = nullptr;
-static lv_obj_t *lblMediaShuf = nullptr, *lblMediaRep = nullptr, *boxMediaQueue = nullptr, *lblMediaQueue[6] = {nullptr};
+static lv_obj_t *lblMediaShuf = nullptr, *lblMediaRep = nullptr, *barMediaProg = nullptr, *lblMediaProg = nullptr;
+static lv_obj_t *barStepsGoal = nullptr, *lblStepsGoal = nullptr, *chartBatt = nullptr;
+static lv_chart_series_t *serBatt = nullptr;
+static uint32_t gLastChartMs = 0;
+
+// Timer (SC_TIMER)
+static lv_obj_t *rollerTimer = nullptr, *arcTimer = nullptr, *lblTimerVal = nullptr, *lblTimerBtn = nullptr;
+static bool      gTimerRun = false;
+static uint32_t  gTimerTotalS = 300, gTimerRemS = 300, gTimerLastMs = 0;
+
+// Lock Screen (SC_LOCK) + LittleFS /lock.bin
+static lv_obj_t *imgLockBg = nullptr, *lblLockTime = nullptr, *lblLockDate = nullptr, *lblLockHint = nullptr;
+static uint8_t  *gLockBuf = nullptr;
+static lv_image_dsc_t gLockDsc = {};
+static bool      gLockReady = false;
+
+// Non-blocking Top Toast (lv_layer_top)
+static lv_obj_t *boxToast = nullptr, *lblToast = nullptr;
+static uint32_t  gToastHideAt = 0;
 static lv_obj_t *lblNavEta = nullptr, *lblNavDist = nullptr, *lblNavAction = nullptr, *lblNavInstr = nullptr;
 static lv_obj_t *lblNavHdr = nullptr, *lblNavSpeed = nullptr, *lblNavMusic = nullptr, *lblRideBtn = nullptr;
 static lv_obj_t *wakeShield = nullptr;
@@ -147,6 +171,7 @@ static void wakeScreen();
 static void showScreen(int idx);
 static void updateWatchLinkUI();
 static void updateMediaUI();
+static void updateSteps();
 static void updateNavUI();
 static void updateBleUI();
 static void updateMeshUI();
@@ -307,6 +332,7 @@ static void applyThemePayload(const blecomp::ThemePayload &tp)
     prefs.putUInt("otxt",  tp.text);
     prefs.putUInt("omut",  tp.muted);
     prefs.putUInt("oacc",  tp.accent);
+    if (cfgLockScreen) curScreen = SC_LOCK;
     buildUI();
 }
 
@@ -333,6 +359,66 @@ static void onTimeout(lv_event_t *e)
 }
 
 // ----------------------------------------------------------------- builders
+static void fillDefaultWallpaper(uint8_t *buf)
+{
+    if (!buf) return;
+    uint32_t bg = PALETTES[cfgPalette].bg;
+    uint32_t ac = PALETTES[cfgPalette].accent;
+    uint8_t r0 = (bg >> 16) & 0xFF, g0 = (bg >> 8) & 0xFF, b0 = bg & 0xFF;
+    uint8_t r1 = (ac >> 16) & 0xFF, g1 = (ac >> 8) & 0xFF, b1 = ac & 0xFF;
+    for (int y = 0; y < 240; y++) {
+        for (int x = 0; x < 240; x++) {
+            int d = ((x - 120) * (x - 120) + (y - 110) * (y - 110));
+            bool grid = (x % 24 == 0) || (y % 24 == 0);
+            int mix = (d < 8500) ? (8500 - d) / 110 : 0;
+            if (grid && mix < 28) mix = 28;
+            if (mix > 90) mix = 90;
+            uint8_t r = (uint8_t)((r0 * (100 - mix) + r1 * mix) / 100);
+            uint8_t g = (uint8_t)((g0 * (100 - mix) + g1 * mix) / 100);
+            uint8_t b = (uint8_t)((b0 * (100 - mix) + b1 * mix) / 100);
+            uint16_t c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+            size_t idx = (size_t)(y * 240 + x) * 2;
+            buf[idx] = (c >> 8) & 0xFF;
+            buf[idx + 1] = c & 0xFF;
+        }
+    }
+}
+
+static void initLockWallpaper()
+{
+    static constexpr size_t kImgBytes = 240 * 240 * 2;
+    if (!gLockBuf) gLockBuf = (uint8_t *)ps_malloc(kImgBytes);
+    if (!gLockBuf) return;
+    bool loaded = false;
+    if (LittleFS.exists("/lock.bin")) {
+        File f = LittleFS.open("/lock.bin", "r");
+        if (f && f.size() == kImgBytes) {
+            size_t n = f.read(gLockBuf, kImgBytes);
+            loaded = (n == kImgBytes);
+        }
+        if (f) f.close();
+    }
+    if (!loaded) fillDefaultWallpaper(gLockBuf);
+    gLockDsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    gLockDsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    gLockDsc.header.flags = 0;
+    gLockDsc.header.w = 240;
+    gLockDsc.header.h = 240;
+    gLockDsc.header.stride = 240 * 2;
+    gLockDsc.data_size = kImgBytes;
+    gLockDsc.data = gLockBuf;
+    gLockReady = true;
+}
+
+static void showToast(const char *srcTxt, const char *bodyTxt)
+{
+    if (!boxToast || !lblToast) return;
+    lv_label_set_text_fmt(lblToast, "%s: %s", srcTxt && srcTxt[0] ? srcTxt : "Msg", bodyTxt && bodyTxt[0] ? bodyTxt : "");
+    lv_obj_remove_flag(boxToast, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(boxToast);
+    gToastHideAt = millis() + 3200UL;
+}
+
 static void buildWatch(lv_obj_t *scr)
 {
     lv_obj_t *p = mkPage(scr);
@@ -347,7 +433,7 @@ static void buildWatch(lv_obj_t *scr)
     lblBattery = lv_label_create(p);
     lv_obj_set_style_text_font(lblBattery, FONT_XS, 0);
     lv_obj_set_style_text_color(lblBattery, colMuted(), 0);
-    lv_obj_align(lblBattery, LV_ALIGN_TOP_RIGHT, -46, 0);
+    lv_obj_align(lblBattery, LV_ALIGN_TOP_RIGHT, -44, 0);
     lv_label_set_text(lblBattery, "--%");
 
     barBattery = lv_bar_create(p);
@@ -456,7 +542,7 @@ static void buildLauncher(lv_obj_t *scr)
     lv_obj_set_style_text_color(sub, colMuted(), 0);
 
     lv_obj_t *grid = lv_obj_create(p);
-    lv_obj_set_size(grid, 224, 168);
+    lv_obj_set_size(grid, 224, 174);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(grid, 0, 0);
     lv_obj_set_style_pad_all(grid, 0, 0);
@@ -472,14 +558,15 @@ static void buildLauncher(lv_obj_t *scr)
         {"MSGS",     blecomp::unreadCount()  ? "unread"  : "reply",  SC_NOTIF,    blecomp::unreadCount() > 0},
         {"BLE",      blecomp::connected()    ? "linked"  : (blecomp::enabled() ? "adv" : "off"), SC_BLE, false},
         {"THEMES",   PALETTES[cfgPalette].name,                      SC_THEMES,   false},
-        {"STEPS",    "pedometer",                                    SC_STEPS,    false},
+        {"STEPS",    "goal + batt",                                  SC_STEPS,    false},
+        {"TIMER",    gTimerRun ? "running" : "roller",               SC_TIMER,    gTimerRun},
         {"MESH",     meshsvc::enabled() ? "radio on" : "off",        SC_MESH,     meshsvc::enabled()},
-        {"SETTINGS", "power/ui",                                     SC_SETTINGS, false},
+        {"SETTINGS", "power/lock",                                   SC_SETTINGS, false},
     };
 
     for (const auto &t : kTiles) {
         lv_obj_t *b = lv_button_create(grid);
-        lv_obj_set_size(b, 108, 37);
+        lv_obj_set_size(b, 108, 31);
         lv_obj_set_style_bg_color(b, colSurface(), 0);
         lv_obj_set_style_border_width(b, t.highlight ? 2 : 1, 0);
         lv_obj_set_style_border_color(b, t.highlight ? colAccent() : colMuted(), 0);
@@ -607,12 +694,21 @@ static void buildMedia(lv_obj_t *scr)
     lv_obj_align(lblMediaAlbum, LV_ALIGN_TOP_LEFT, 0, 52);
     lv_label_set_text(lblMediaAlbum, "Start music on phone or PC");
 
-    lv_obj_t *rule = lv_obj_create(boxMediaCard);
-    lv_obj_set_size(rule, 202, 2);
-    lv_obj_align(rule, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(rule, colAccent(), 0);
-    lv_obj_set_style_border_width(rule, 0, 0);
-    lv_obj_set_style_radius(rule, 0, 0);
+    lblMediaProg = lv_label_create(boxMediaCard);
+    lv_obj_set_style_text_font(lblMediaProg, FONT_XS, 0);
+    lv_obj_set_style_text_color(lblMediaProg, colMuted(), 0);
+    lv_obj_align(lblMediaProg, LV_ALIGN_BOTTOM_RIGHT, 0, -7);
+    lv_label_set_text(lblMediaProg, "");
+
+    barMediaProg = lv_bar_create(boxMediaCard);
+    lv_obj_set_size(barMediaProg, 202, 4);
+    lv_obj_align(barMediaProg, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_bar_set_range(barMediaProg, 0, 1000);
+    lv_bar_set_value(barMediaProg, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(barMediaProg, colBg(), 0);
+    lv_obj_set_style_bg_color(barMediaProg, colAccent(), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(barMediaProg, 0, 0);
+    lv_obj_set_style_radius(barMediaProg, 0, LV_PART_INDICATOR);
 
     // Transport buttons: PREV | PLAY/PAUSE | NEXT
     mkButton(p, LV_SYMBOL_PREV, -76, 26, 64, 34, [](lv_event_t *) {
@@ -641,76 +737,29 @@ static void buildMedia(lv_obj_t *scr)
         blecomp::sendMusicCmd("next");
     }, nullptr);
 
-    // Mode row: SHUF | REP | QUEUE (LVGL built-in symbols)
-    mkButton(p, LV_SYMBOL_SHUFFLE, -74, 62, 66, 24, [](lv_event_t *) {
+    // Bottom control row: SHUF | VOL- | VOL+ | REP (all LVGL symbols, no queue clutter)
+    mkButton(p, LV_SYMBOL_SHUFFLE, -82, 66, 48, 28, [](lv_event_t *) {
         blecomp::toggleShuffle();
         updateMediaUI();
     }, &lblMediaShuf);
     if (lblMediaShuf) lv_obj_set_style_text_font(lblMediaShuf, FONT_S, 0);
-    mkButton(p, LV_SYMBOL_LOOP, 0, 62, 68, 24, [](lv_event_t *) {
+
+    lv_obj_t *lblVm = nullptr, *lblVp = nullptr;
+    mkButton(p, LV_SYMBOL_VOLUME_MID, -28, 66, 48, 28, [](lv_event_t *) {
+        blecomp::sendMusicCmd("volumedown");
+    }, &lblVm);
+    if (lblVm) lv_obj_set_style_text_font(lblVm, FONT_S, 0);
+
+    mkButton(p, LV_SYMBOL_VOLUME_MAX, 28, 66, 48, 28, [](lv_event_t *) {
+        blecomp::sendMusicCmd("volumeup");
+    }, &lblVp);
+    if (lblVp) lv_obj_set_style_text_font(lblVp, FONT_S, 0);
+
+    mkButton(p, LV_SYMBOL_LOOP, 82, 66, 48, 28, [](lv_event_t *) {
         blecomp::toggleRepeat();
         updateMediaUI();
     }, &lblMediaRep);
     if (lblMediaRep) lv_obj_set_style_text_font(lblMediaRep, FONT_S, 0);
-    lv_obj_t *lblQueueBtn = nullptr;
-    mkButton(p, LV_SYMBOL_LIST, 74, 62, 66, 24, [](lv_event_t *) {
-        if (boxMediaQueue) {
-            lv_obj_remove_flag(boxMediaQueue, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_foreground(boxMediaQueue);
-        }
-    }, &lblQueueBtn);
-    if (lblQueueBtn) lv_obj_set_style_text_font(lblQueueBtn, FONT_S, 0);
-
-    // Volume row centered cleanly between bottom < and > nav buttons
-    mkButton(p, "vol -", -36, 94, 64, 24, [](lv_event_t *) {
-        blecomp::sendMusicCmd("volumedown");
-    }, nullptr);
-    mkButton(p, "vol +", 36, 94, 64, 24, [](lv_event_t *) {
-        blecomp::sendMusicCmd("volumeup");
-    }, nullptr);
-
-    // Queue / Playlist Browse overlay (hidden by default)
-    boxMediaQueue = lv_obj_create(p);
-    lv_obj_set_size(boxMediaQueue, 224, 206);
-    lv_obj_align(boxMediaQueue, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(boxMediaQueue, colBg(), 0);
-    lv_obj_set_style_border_width(boxMediaQueue, 2, 0);
-    lv_obj_set_style_border_color(boxMediaQueue, colAccent(), 0);
-    lv_obj_set_style_radius(boxMediaQueue, 0, 0);
-    lv_obj_set_style_pad_all(boxMediaQueue, 6, 0);
-    lv_obj_set_flex_flow(boxMediaQueue, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(boxMediaQueue, 4, 0);
-    lv_obj_set_scrollbar_mode(boxMediaQueue, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_add_flag(boxMediaQueue, LV_OBJ_FLAG_HIDDEN);
-
-    lv_obj_t *qHdr = lv_obj_create(boxMediaQueue);
-    lv_obj_set_size(qHdr, 208, 22);
-    lv_obj_set_style_bg_opa(qHdr, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(qHdr, 0, 0);
-    lv_obj_set_style_pad_all(qHdr, 0, 0);
-    lv_obj_set_flex_flow(qHdr, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(qHdr, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_t *qt = lv_label_create(qHdr);
-    lv_label_set_text(qt, "QUEUE / PLAYLIST");
-    lv_obj_set_style_text_font(qt, FONT_XS, 0);
-    lv_obj_set_style_text_color(qt, colAccent(), 0);
-    mkButton(qHdr, "close", 0, 0, 52, 20, [](lv_event_t *) {
-        if (boxMediaQueue) lv_obj_add_flag(boxMediaQueue, LV_OBJ_FLAG_HIDDEN);
-    }, nullptr);
-
-    for (int i = 0; i < 6; i++) {
-        mkButton(boxMediaQueue, "-", 0, 0, 208, 24, [](lv_event_t *e) {
-            int idx = (int)(intptr_t)lv_event_get_user_data(e);
-            if (idx < blecomp::queueCount()) {
-                blecomp::sendQueuePlay(idx);
-                if (boxMediaQueue) lv_obj_add_flag(boxMediaQueue, LV_OBJ_FLAG_HIDDEN);
-                instance.vibrator();
-            }
-        }, &lblMediaQueue[i]);
-        lv_obj_set_user_data(lv_obj_get_parent(lblMediaQueue[i]), (void *)(intptr_t)i);
-        lv_label_set_long_mode(lblMediaQueue[i], LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(lblMediaQueue[i], 196);
-    }
 }
 
 static void buildNav(lv_obj_t *scr)
@@ -865,7 +914,7 @@ static void buildNotif(lv_obj_t *scr)
     lv_obj_set_style_text_font(lblNotifTag, FONT_XS, 0);
     lv_obj_set_style_text_color(lblNotifTag, colMuted(), 0);
 
-    mkButton(hdrRow, "dismiss", 0, 0, 62, 20, [](lv_event_t *) {
+    mkButton(hdrRow, LV_SYMBOL_TRASH, 0, 0, 32, 20, [](lv_event_t *) {
         char s[20], t[36], b[80];
         long id = 0; bool rep = false;
         blecomp::latestNotif(s, sizeof(s), t, sizeof(t), b, sizeof(b), &id, &rep);
@@ -899,34 +948,43 @@ static void buildNotif(lv_obj_t *scr)
     lv_obj_set_style_text_color(lblNotifBody, colText(), 0);
     lv_label_set_text(lblNotifBody, "WhatsApp/S21 messages appear here.");
 
-    // 6 PT-BR Quick Replies (2 cols x 3 rows)
-    lv_obj_t *grid = lv_obj_create(p);
-    lv_obj_set_size(grid, 224, 102);
-    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(grid, 0, 0);
-    lv_obj_set_style_pad_all(grid, 0, 0);
-    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_style_pad_column(grid, 6, 0);
-    lv_obj_set_style_pad_row(grid, 5, 0);
-    lv_obj_set_scrollbar_mode(grid, LV_SCROLLBAR_MODE_OFF);
-
-    static const char *kQuickReplies[6] = {
-        "OK", "To indo", "Ja chego", "Sim", "Nao", "Te ligo"
+    // 6 PT-BR Quick Replies via native lv_buttonmatrix
+    static const char *kReplyMap[] = {
+        "OK", "To indo", "\n",
+        "Ja chego", "Sim", "\n",
+        "Nao", "Te ligo", ""
     };
-    for (int i = 0; i < 6; i++) {
-        mkButton(grid, kQuickReplies[i], 0, 0, 108, 30, [](lv_event_t *e) {
-            const char *msg = (const char *)lv_event_get_user_data(e);
-            char s[20], t[36], b[80];
-            long id = 0; bool rep = false;
-            blecomp::latestNotif(s, sizeof(s), t, sizeof(t), b, sizeof(b), &id, &rep);
-            bool sent = blecomp::sendNotifReply(id, msg);
-            if (lblNotifTag) {
-                lv_label_set_text(lblNotifTag, sent ? "[ SENT! ]" : "[ NO BLE ]");
-                lv_obj_set_style_text_color(lblNotifTag, sent ? colAccent() : colMuted(), 0);
-            }
-            instance.vibrator();
-        }, (void *)kQuickReplies[i]);
-    }
+    lv_obj_t *bm = lv_buttonmatrix_create(p);
+    lv_buttonmatrix_set_map(bm, kReplyMap);
+    lv_obj_set_size(bm, 224, 102);
+    lv_obj_align(bm, LV_ALIGN_CENTER, 0, 34);
+    lv_obj_set_style_bg_opa(bm, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(bm, 0, 0);
+    lv_obj_set_style_pad_all(bm, 0, 0);
+    lv_obj_set_style_pad_row(bm, 5, 0);
+    lv_obj_set_style_pad_column(bm, 6, 0);
+    lv_obj_set_style_bg_color(bm, colSurface(), LV_PART_ITEMS);
+    lv_obj_set_style_border_width(bm, 1, LV_PART_ITEMS);
+    lv_obj_set_style_border_color(bm, colMuted(), LV_PART_ITEMS);
+    lv_obj_set_style_radius(bm, 0, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(bm, colText(), LV_PART_ITEMS);
+    lv_obj_set_style_text_font(bm, FONT_S, LV_PART_ITEMS);
+    lv_obj_add_event_cb(bm, [](lv_event_t *e) {
+        lv_obj_t *m = (lv_obj_t *)lv_event_get_target(e);
+        uint32_t bid = lv_buttonmatrix_get_selected_button(m);
+        if (bid == LV_BUTTONMATRIX_BUTTON_NONE) return;
+        const char *msg = lv_buttonmatrix_get_button_text(m, bid);
+        if (!msg) return;
+        char s[20], t[36], b[80];
+        long id = 0; bool rep = false;
+        blecomp::latestNotif(s, sizeof(s), t, sizeof(t), b, sizeof(b), &id, &rep);
+        bool sent = blecomp::sendNotifReply(id, msg);
+        if (lblNotifTag) {
+            lv_label_set_text(lblNotifTag, sent ? "[ SENT! ]" : "[ NO BLE ]");
+            lv_obj_set_style_text_color(lblNotifTag, sent ? colAccent() : colMuted(), 0);
+        }
+        instance.vibrator();
+    }, LV_EVENT_VALUE_CHANGED, nullptr);
 }
 
 static void buildBle(lv_obj_t *scr)
@@ -1002,7 +1060,7 @@ static void buildBle(lv_obj_t *scr)
             }
         }, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         lv_obj_t *xl = lv_label_create(rm);
-        lv_label_set_text(xl, "X");
+        lv_label_set_text(xl, LV_SYMBOL_TRASH);
         lv_obj_set_style_text_font(xl, FONT_XS, 0);
         lv_obj_set_style_text_color(xl, colAccent(), 0);
         lv_obj_center(xl);
@@ -1053,14 +1111,181 @@ static void buildBle(lv_obj_t *scr)
 static void buildSteps(lv_obj_t *scr)
 {
     lv_obj_t *p = mkPage(scr);
-    mkTag(p, "STEPS", 0, -94);
-    lblStepsBig = mkLabel(p, "0", FONT_XL, PALETTES[cfgPalette].text, 0, -16);
-    mkLabel(p, "today", FONT_S, PALETTES[cfgPalette].muted, 0, 26);
-    mkButton(p, "reset", 0, 74, 92, 30, [](lv_event_t *) {
+    mkTag(p, "STEPS & POWER", 0, -98);
+
+    lblStepsBig = mkLabel(p, "0", FONT_L, PALETTES[cfgPalette].text, -48, -62);
+    lblStepsGoal = mkLabel(p, "/ 8000", FONT_XS, PALETTES[cfgPalette].muted, 56, -58);
+
+    barStepsGoal = lv_bar_create(p);
+    lv_obj_set_size(barStepsGoal, 212, 10);
+    lv_obj_align(barStepsGoal, LV_ALIGN_CENTER, 0, -32);
+    lv_bar_set_range(barStepsGoal, 0, 8000);
+    lv_obj_set_style_bg_color(barStepsGoal, colSurface(), 0);
+    lv_obj_set_style_bg_color(barStepsGoal, colAccent(), LV_PART_INDICATOR);
+    lv_obj_set_style_border_width(barStepsGoal, 1, 0);
+    lv_obj_set_style_border_color(barStepsGoal, colMuted(), 0);
+    lv_obj_set_style_radius(barStepsGoal, 0, 0);
+    lv_obj_set_style_radius(barStepsGoal, 0, LV_PART_INDICATOR);
+
+    mkLabel(p, "BATTERY mV HISTORY", FONT_XS, PALETTES[cfgPalette].muted, 0, -10);
+    chartBatt = lv_chart_create(p);
+    lv_obj_set_size(chartBatt, 212, 58);
+    lv_obj_align(chartBatt, LV_ALIGN_CENTER, 0, 28);
+    lv_chart_set_type(chartBatt, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(chartBatt, 16);
+    lv_chart_set_range(chartBatt, LV_CHART_AXIS_PRIMARY_Y, 3300, 4300);
+    lv_chart_set_div_line_count(chartBatt, 3, 4);
+    lv_obj_set_style_bg_color(chartBatt, colSurface(), 0);
+    lv_obj_set_style_border_width(chartBatt, 1, 0);
+    lv_obj_set_style_border_color(chartBatt, colMuted(), 0);
+    lv_obj_set_style_radius(chartBatt, 0, 0);
+    lv_obj_set_style_line_color(chartBatt, colMuted(), LV_PART_MAIN);
+    serBatt = lv_chart_add_series(chartBatt, colAccent(), LV_CHART_AXIS_PRIMARY_Y);
+    int32_t mv0 = instance.getBattVoltage();
+    if (mv0 < 3300 || mv0 > 4400) mv0 = 3900;
+    for (int i = 0; i < 16; i++) lv_chart_set_next_value(chartBatt, serBatt, mv0);
+
+    mkButton(p, LV_SYMBOL_REFRESH " reset steps", 0, 82, 134, 26, [](lv_event_t *) {
         instance.resetStepCounter();
-        if (lblStepsBig) lv_label_set_text(lblStepsBig, "0");
-        updateWatchLinkUI();
+        updateSteps();
     }, nullptr);
+}
+
+static uint32_t timerRollerSecs()
+{
+    if (!rollerTimer) return 300;
+    static const uint32_t kSec[6] = {60, 180, 300, 600, 900, 1500};
+    uint32_t idx = lv_roller_get_selected(rollerTimer);
+    return (idx < 6) ? kSec[idx] : 300;
+}
+
+static void updateTimerUI()
+{
+    if (lblTimerVal) {
+        uint32_t m = gTimerRemS / 60, s = gTimerRemS % 60;
+        lv_label_set_text_fmt(lblTimerVal, "%02lu:%02lu", (unsigned long)m, (unsigned long)s);
+        lv_obj_set_style_text_color(lblTimerVal, gTimerRun ? colAccent() : colText(), 0);
+    }
+    if (arcTimer && gTimerTotalS > 0) {
+        lv_arc_set_range(arcTimer, 0, (int32_t)gTimerTotalS);
+        lv_arc_set_value(arcTimer, (int32_t)gTimerRemS);
+    }
+    if (lblTimerBtn) {
+        lv_label_set_text(lblTimerBtn, gTimerRun ? LV_SYMBOL_PAUSE " pause" : LV_SYMBOL_PLAY " start");
+    }
+}
+
+static void buildTimer(lv_obj_t *scr)
+{
+    lv_obj_t *p = mkPage(scr);
+    mkTag(p, "TIMER / POMODORO", 0, -98);
+
+    rollerTimer = lv_roller_create(p);
+    lv_roller_set_options(rollerTimer, "1 min\n3 min\n5 min\n10 min\n15 min\n25 min", LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_visible_row_count(rollerTimer, 3);
+    lv_roller_set_selected(rollerTimer, 2, LV_ANIM_OFF);
+    lv_obj_set_size(rollerTimer, 84, 96);
+    lv_obj_align(rollerTimer, LV_ALIGN_CENTER, -62, -16);
+    lv_obj_set_style_bg_color(rollerTimer, colSurface(), 0);
+    lv_obj_set_style_border_width(rollerTimer, 1, 0);
+    lv_obj_set_style_border_color(rollerTimer, colMuted(), 0);
+    lv_obj_set_style_radius(rollerTimer, 0, 0);
+    lv_obj_set_style_text_color(rollerTimer, colText(), 0);
+    lv_obj_set_style_bg_color(rollerTimer, colAccent(), LV_PART_SELECTED);
+    lv_obj_set_style_text_color(rollerTimer, colBg(), LV_PART_SELECTED);
+    lv_obj_add_event_cb(rollerTimer, [](lv_event_t *) {
+        if (!gTimerRun) {
+            gTimerTotalS = timerRollerSecs();
+            gTimerRemS = gTimerTotalS;
+            updateTimerUI();
+        }
+    }, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    arcTimer = lv_arc_create(p);
+    lv_obj_set_size(arcTimer, 110, 110);
+    lv_obj_align(arcTimer, LV_ALIGN_CENTER, 48, -16);
+    lv_arc_set_rotation(arcTimer, 270);
+    lv_arc_set_bg_angles(arcTimer, 0, 360);
+    lv_obj_remove_style(arcTimer, nullptr, LV_PART_KNOB);
+    lv_obj_remove_flag(arcTimer, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_color(arcTimer, colSurface(), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(arcTimer, colAccent(), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(arcTimer, 8, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arcTimer, 8, LV_PART_INDICATOR);
+
+    lblTimerVal = lv_label_create(arcTimer);
+    lv_obj_set_style_text_font(lblTimerVal, FONT_M, 0);
+    lv_obj_set_style_text_color(lblTimerVal, colText(), 0);
+    lv_obj_center(lblTimerVal);
+
+    mkButton(p, LV_SYMBOL_PLAY " start", -46, 68, 102, 28, [](lv_event_t *) {
+        if (gTimerRemS == 0) {
+            gTimerTotalS = timerRollerSecs();
+            gTimerRemS = gTimerTotalS;
+        }
+        gTimerRun = !gTimerRun;
+        gTimerLastMs = millis();
+        updateTimerUI();
+    }, &lblTimerBtn);
+
+    mkButton(p, LV_SYMBOL_REFRESH " reset", 58, 68, 86, 28, [](lv_event_t *) {
+        gTimerRun = false;
+        gTimerTotalS = timerRollerSecs();
+        gTimerRemS = gTimerTotalS;
+        updateTimerUI();
+    }, nullptr);
+
+    updateTimerUI();
+}
+
+static void buildLock(lv_obj_t *scr)
+{
+    lv_obj_set_style_bg_color(scr, colBg(), 0);
+    lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
+    initLockWallpaper();
+
+    imgLockBg = lv_image_create(scr);
+    if (gLockReady) lv_image_set_src(imgLockBg, &gLockDsc);
+    lv_obj_set_size(imgLockBg, 240, 240);
+    lv_obj_center(imgLockBg);
+
+    lv_obj_t *topScrim = lv_obj_create(scr);
+    lv_obj_set_size(topScrim, 240, 98);
+    lv_obj_align(topScrim, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(topScrim, colBg(), 0);
+    lv_obj_set_style_bg_opa(topScrim, 175, 0);
+    lv_obj_set_style_border_width(topScrim, 0, 0);
+    lv_obj_set_style_radius(topScrim, 0, 0);
+    lv_obj_set_scrollbar_mode(topScrim, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_remove_flag(topScrim, LV_OBJ_FLAG_CLICKABLE);
+
+    lblLockDate = lv_label_create(topScrim);
+    lv_obj_set_style_text_font(lblLockDate, FONT_XS, 0);
+    lv_obj_set_style_text_color(lblLockDate, colAccent(), 0);
+    lv_obj_align(lblLockDate, LV_ALIGN_TOP_MID, 0, 4);
+    lv_label_set_text(lblLockDate, "--- -- ---");
+
+    lblLockTime = lv_label_create(topScrim);
+    lv_obj_set_style_text_font(lblLockTime, FONT_XL, 0);
+    lv_obj_set_style_text_color(lblLockTime, colText(), 0);
+    lv_obj_align(lblLockTime, LV_ALIGN_BOTTOM_MID, 0, 2);
+    lv_label_set_text(lblLockTime, "--:--");
+
+    lv_obj_t *botScrim = lv_obj_create(scr);
+    lv_obj_set_size(botScrim, 240, 26);
+    lv_obj_align(botScrim, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(botScrim, colBg(), 0);
+    lv_obj_set_style_bg_opa(botScrim, 180, 0);
+    lv_obj_set_style_border_width(botScrim, 0, 0);
+    lv_obj_set_style_radius(botScrim, 0, 0);
+    lv_obj_set_scrollbar_mode(botScrim, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_remove_flag(botScrim, LV_OBJ_FLAG_CLICKABLE);
+
+    lblLockHint = lv_label_create(botScrim);
+    lv_obj_set_style_text_font(lblLockHint, FONT_XS, 0);
+    lv_obj_set_style_text_color(lblLockHint, colText(), 0);
+    lv_obj_center(lblLockHint);
+    lv_label_set_text(lblLockHint, LV_SYMBOL_UP " slide to unlock");
 }
 
 static const char kMeshQuick[3][12] = {"hi", "ok?", "on my way"};
@@ -1143,21 +1368,27 @@ static void buildSettings(lv_obj_t *scr)
     lv_obj_set_flex_flow(rrow, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(rrow, 4, 0);
 
-    char bleLbl[16], meshLbl[16], wrLbl[16];
+    char bleLbl[16], meshLbl[16], wrLbl[16], lkLbl[16];
     snprintf(bleLbl,  sizeof(bleLbl),  "ble:%s",  blecomp::enabled() ? "ON" : "OFF");
-    snprintf(meshLbl, sizeof(meshLbl), "mesh:%s", meshsvc::enabled() ? "ON" : "OFF");
-    snprintf(wrLbl,   sizeof(wrLbl),   "wrst:%s", cfgWristCtrl       ? "ON" : "OFF");
-    mkButton(rrow, bleLbl, 0, 0, 69, 26, [](lv_event_t *) {
+    snprintf(meshLbl, sizeof(meshLbl), "msh:%s",  meshsvc::enabled() ? "ON" : "OFF");
+    snprintf(wrLbl,   sizeof(wrLbl),   "wrs:%s",  cfgWristCtrl       ? "ON" : "OFF");
+    snprintf(lkLbl,   sizeof(lkLbl),   "img:%s",  cfgLockScreen      ? "ON" : "OFF");
+    mkButton(rrow, bleLbl, 0, 0, 51, 26, [](lv_event_t *) {
         blecomp::setEnabled(!blecomp::enabled());
         buildUI();
     }, nullptr);
-    mkButton(rrow, meshLbl, 0, 0, 69, 26, [](lv_event_t *) {
+    mkButton(rrow, meshLbl, 0, 0, 51, 26, [](lv_event_t *) {
         meshsvc::setEnabled(!meshsvc::enabled());
         buildUI();
     }, nullptr);
-    mkButton(rrow, wrLbl, 0, 0, 70, 26, [](lv_event_t *) {
+    mkButton(rrow, wrLbl, 0, 0, 51, 26, [](lv_event_t *) {
         cfgWristCtrl = !cfgWristCtrl;
         prefs.putBool("wrist", cfgWristCtrl);
+        buildUI();
+    }, nullptr);
+    mkButton(rrow, lkLbl, 0, 0, 51, 26, [](lv_event_t *) {
+        cfgLockScreen = !cfgLockScreen;
+        prefs.putBool("lock", cfgLockScreen);
         buildUI();
     }, nullptr);
 
@@ -1202,14 +1433,15 @@ static void buildSettings(lv_obj_t *scr)
 static void updateWatchLinkUI()
 {
     if (lblLinkFace) {
+        const char *msh = meshsvc::enabled() ? (" " LV_SYMBOL_WIFI) : "";
         if (!blecomp::enabled()) {
-            lv_label_set_text_fmt(lblLinkFace, "ble off%s", meshsvc::enabled() ? " | mesh" : "");
+            lv_label_set_text_fmt(lblLinkFace, LV_SYMBOL_BLUETOOTH " off%s", msh);
             lv_obj_set_style_text_color(lblLinkFace, colMuted(), 0);
         } else if (blecomp::connected()) {
-            lv_label_set_text_fmt(lblLinkFace, "* ble (%d)%s", blecomp::peerCount(), meshsvc::enabled() ? " | mesh" : "");
+            lv_label_set_text_fmt(lblLinkFace, LV_SYMBOL_BLUETOOTH " %dp%s", blecomp::peerCount(), msh);
             lv_obj_set_style_text_color(lblLinkFace, colAccent(), 0);
         } else {
-            lv_label_set_text_fmt(lblLinkFace, "o ble adv%s", meshsvc::enabled() ? " | mesh" : "");
+            lv_label_set_text_fmt(lblLinkFace, LV_SYMBOL_BLUETOOTH " adv%s", msh);
             lv_obj_set_style_text_color(lblLinkFace, colMuted(), 0);
         }
     }
@@ -1272,16 +1504,18 @@ static void updateMediaUI()
         lv_label_set_text(lblMediaRep, rp == 2 ? (LV_SYMBOL_LOOP " 1") : (rp == 1 ? (LV_SYMBOL_LOOP " A") : LV_SYMBOL_LOOP));
         lv_obj_set_style_text_color(lblMediaRep, rp > 0 ? colAccent() : colMuted(), 0);
     }
-    int qc = blecomp::queueCount();
-    for (int i = 0; i < 6; i++) {
-        if (!lblMediaQueue[i]) continue;
-        if (i < qc) {
-            lv_label_set_text_fmt(lblMediaQueue[i], "%d. %s", i + 1, blecomp::queueItem(i));
-            lv_obj_set_style_text_color(lblMediaQueue[i], colText(), 0);
-        } else {
-            lv_label_set_text(lblMediaQueue[i], i == 0 ? "(queue empty)" : "-");
-            lv_obj_set_style_text_color(lblMediaQueue[i], colMuted(), 0);
-        }
+    uint32_t pos = 0, dur = 0;
+    blecomp::mediaProgress(&pos, &dur);
+    if (barMediaProg) {
+        int v = (dur > 0) ? (int)((pos * 1000UL) / dur) : 0;
+        if (v > 1000) v = 1000;
+        lv_bar_set_value(barMediaProg, v, LV_ANIM_OFF);
+    }
+    if (lblMediaProg) {
+        if (dur > 0) lv_label_set_text_fmt(lblMediaProg, "%lu:%02lu/%lu:%02lu",
+                                           (unsigned long)(pos / 60), (unsigned long)(pos % 60),
+                                           (unsigned long)(dur / 60), (unsigned long)(dur % 60));
+        else         lv_label_set_text(lblMediaProg, "");
     }
 }
 
@@ -1520,10 +1754,12 @@ static void updateClock()
     tmFromUtc(utc, t);
     if (lblTime)    lv_label_set_text_fmt(lblTime, "%02d:%02d", t.tm_hour, t.tm_min);
     if (lblSeconds) lv_label_set_text_fmt(lblSeconds, ":%02d", t.tm_sec);
-    if (lblDate) {
+    if (lblLockTime) lv_label_set_text_fmt(lblLockTime, "%02d:%02d", t.tm_hour, t.tm_min);
+    if (lblDate || lblLockDate) {
         static const char *wd[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
         static const char *mo[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-        lv_label_set_text_fmt(lblDate, "%s %d %s", wd[t.tm_wday], t.tm_mday, mo[t.tm_mon]);
+        if (lblDate)     lv_label_set_text_fmt(lblDate,     "%s %d %s", wd[t.tm_wday], t.tm_mday, mo[t.tm_mon]);
+        if (lblLockDate) lv_label_set_text_fmt(lblLockDate, "%s %d %s", wd[t.tm_wday], t.tm_mday, mo[t.tm_mon]);
     }
 }
 
@@ -1533,11 +1769,23 @@ static void updateBattery()
     if (pct < 0 || pct > 100) pct = 0;
     if (barBattery) lv_bar_set_value(barBattery, (int)pct, LV_ANIM_OFF);
     if (lblBattery) {
-        if (instance.isCharging()) lv_label_set_text_fmt(lblBattery, "%d%%+", (int)pct);
-        else                       lv_label_set_text_fmt(lblBattery, "%d%%", (int)pct);
+        const char *ic = instance.isCharging() ? LV_SYMBOL_CHARGE :
+                         (pct >= 80 ? LV_SYMBOL_BATTERY_FULL :
+                         (pct >= 55 ? LV_SYMBOL_BATTERY_3 :
+                         (pct >= 30 ? LV_SYMBOL_BATTERY_2 :
+                         (pct >= 15 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY))));
+        lv_label_set_text_fmt(lblBattery, "%s %d%%", ic, (int)pct);
     }
     if (lblNavHdr) {
         lv_label_set_text_fmt(lblNavHdr, "%s %d%%", gRideMode ? "RIDE" : "NAV", (int)pct);
+    }
+    if (chartBatt && serBatt && (millis() - gLastChartMs > 300000UL || gLastChartMs == 0)) {
+        gLastChartMs = millis();
+        int32_t mv = instance.getBattVoltage();
+        if (mv >= 3200 && mv <= 4400) {
+            lv_chart_set_next_value(chartBatt, serBatt, mv);
+            lv_chart_refresh(chartBatt);
+        }
     }
 }
 
@@ -1545,6 +1793,7 @@ static void updateSteps()
 {
     uint32_t s = instance.getStepCounter();
     if (lblStepsBig) lv_label_set_text_fmt(lblStepsBig, "%lu", (unsigned long)s);
+    if (barStepsGoal) lv_bar_set_value(barStepsGoal, (int32_t)(s > 8000 ? 8000 : s), LV_ANIM_OFF);
     updateWatchLinkUI();
 }
 
@@ -1561,8 +1810,16 @@ static void showScreen(int idx)
     }
 }
 
-static void onNext(lv_event_t *) { showScreen(curScreen + 1); }
-static void onPrev(lv_event_t *) { showScreen(curScreen - 1); }
+static void onNext(lv_event_t *) {
+    int n = curScreen + 1;
+    if (n == SC_LOCK) n = SC_WATCH;
+    showScreen(n);
+}
+static void onPrev(lv_event_t *) {
+    int n = curScreen - 1;
+    if (n < 0 || n == SC_LOCK) n = SC_SETTINGS;
+    showScreen(n);
+}
 
 static void pollSwipe()
 {
@@ -1589,7 +1846,6 @@ static void pollSwipe()
     }
     // In Ride Mode on SC_NAV, lock swipe & clear accidental-tap guards so bumps/gloves don't leave NAV
     if (gRideMode && curScreen == SC_NAV) return;
-    if (!kSwipeOk[curScreen]) return;
 
     lv_point_t pt;
     lv_indev_get_point(gIndev, &pt);
@@ -1597,9 +1853,18 @@ static void pollSwipe()
     int16_t dy = (int16_t)(pt.y - touchY0);
     int16_t adx = dx < 0 ? (int16_t)-dx : dx;
     int16_t ady = dy < 0 ? (int16_t)-dy : dy;
+    if (curScreen == SC_LOCK) {
+        if (adx >= 36 || dy <= -36) {
+            instance.vibrator();
+            showScreen(SC_WATCH);
+        }
+        return;
+    }
+    if (!kSwipeOk[curScreen]) return;
     if (adx < 40 || ady > 30 || adx < ady) return;
 
-    showScreen(curScreen + (dx < 0 ? 1 : -1));
+    if (dx < 0) onNext(nullptr);
+    else        onPrev(nullptr);
 }
 
 // ----------------------------------------------------------------- snapshot & serial
@@ -1685,6 +1950,34 @@ static void handleSerial()
                     gRideMode = (serialBuf.substring(5) == "1" || serialBuf.substring(5) == "on");
                     if (gRideMode) gRideStartMs = millis();
                     updateNavUI();
+                } else if (serialBuf.startsWith("IMG ")) {
+                    size_t expect = (size_t)serialBuf.substring(4).toInt();
+                    if (expect == 240 * 240 * 2 && gLockBuf) {
+                        size_t got = 0;
+                        uint32_t t0 = millis();
+                        while (got < expect && (millis() - t0 < 8000)) {
+                            int avail = Serial.available();
+                            if (avail > 0) {
+                                int want = (int)(expect - got);
+                                if (want > avail) want = avail;
+                                got += Serial.readBytes(gLockBuf + got, (size_t)want);
+                                t0 = millis();
+                            } else {
+                                delay(1);
+                            }
+                        }
+                        if (got == expect) {
+                            File f = LittleFS.open("/lock.bin", "w");
+                            if (f) { f.write(gLockBuf, expect); f.close(); }
+                            gLockReady = true;
+                            if (imgLockBg) lv_image_set_src(imgLockBg, &gLockDsc);
+                            Serial.printf("[img] ok (%u bytes)\n", (unsigned)got);
+                        } else {
+                            Serial.printf("[img] err got %u/%u\n", (unsigned)got, (unsigned)expect);
+                        }
+                    } else {
+                        Serial.println("[img] bad size (expected 115200)");
+                    }
                 } else if (serialBuf.startsWith("TH ")) {
                     String rest = serialBuf.substring(3);
                     int p1 = rest.indexOf('|');
@@ -1750,10 +2043,13 @@ static void buildUI()
     buildBle(screens[SC_BLE]);
     buildThemes(screens[SC_THEMES]);
     buildSteps(screens[SC_STEPS]);
+    buildTimer(screens[SC_TIMER]);
     buildMesh(screens[SC_MESH]);
     buildSettings(screens[SC_SETTINGS]);
+    buildLock(screens[SC_LOCK]);
 
     for (int i = 0; i < SC_COUNT; i++) {
+        if (i == SC_LOCK) continue;
         lv_obj_t *arrowL = lv_button_create(screens[i]);
         lv_obj_set_size(arrowL, 34, 26);
         lv_obj_align(arrowL, LV_ALIGN_BOTTOM_LEFT, 2, -2);
@@ -1793,6 +2089,24 @@ static void buildUI()
     updateBleUI();
     updateMeshUI();
 
+    if (!boxToast) {
+        boxToast = lv_obj_create(lv_layer_top());
+        lv_obj_set_size(boxToast, 228, 30);
+        lv_obj_align(boxToast, LV_ALIGN_TOP_MID, 0, 4);
+        lv_obj_set_style_bg_color(boxToast, colBg(), 0);
+        lv_obj_set_style_border_width(boxToast, 2, 0);
+        lv_obj_set_style_border_color(boxToast, colAccent(), 0);
+        lv_obj_set_style_radius(boxToast, 0, 0);
+        lv_obj_set_style_pad_hor(boxToast, 6, 0);
+        lv_obj_set_scrollbar_mode(boxToast, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_add_flag(boxToast, LV_OBJ_FLAG_HIDDEN);
+        lblToast = lv_label_create(boxToast);
+        lv_obj_set_width(lblToast, 212);
+        lv_label_set_long_mode(lblToast, LV_LABEL_LONG_CLIP);
+        lv_obj_set_style_text_font(lblToast, FONT_XS, 0);
+        lv_obj_set_style_text_color(lblToast, colText(), 0);
+        lv_obj_center(lblToast);
+    }
     if (!wakeShield) {
         wakeShield = lv_obj_create(lv_layer_top());
         lv_obj_set_size(wakeShield, 240, 240);
@@ -1831,6 +2145,9 @@ static void wakeScreen()
     dimmed  = false;
     deepOff = false;
     if (wakeShield) lv_obj_add_flag(wakeShield, LV_OBJ_FLAG_HIDDEN);
+    if (cfgLockScreen && !gRideMode && curScreen != SC_LOCK && curScreen != SC_TIMER) {
+        showScreen(SC_LOCK);
+    }
     instance.setBrightness(cfgBright);
     lv_display_trigger_activity(nullptr);
 }
@@ -1908,6 +2225,8 @@ void setup()
     cfgBright    = prefs.getInt("bright", cfgBright);
     cfgTimeoutS  = prefs.getInt("timeout", cfgTimeoutS);
     cfgWristCtrl = prefs.getBool("wrist", true);
+    cfgLockScreen  = prefs.getBool("lock", true);
+    LittleFS.begin(true);
     {
         int tzStored = prefs.getInt("tz", cfgTzOffsetMin);
         cfgTzOffsetMin = (tzStored > -15 && tzStored < 15) ? tzStored * 60 : tzStored;
@@ -2040,9 +2359,26 @@ void loop()
         wakeScreen();
     }
 
+    if (gToastHideAt && now > gToastHideAt) {
+        gToastHideAt = 0;
+        if (boxToast) lv_obj_add_flag(boxToast, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (gTimerRun && (now - gTimerLastMs >= 1000)) {
+        gTimerLastMs += 1000;
+        if (gTimerRemS > 0) gTimerRemS--;
+        updateTimerUI();
+        if (gTimerRemS == 0) {
+            gTimerRun = false;
+            wakeScreen();
+            showScreen(SC_TIMER);
+            playNavCue("uturn");
+            updateTimerUI();
+        }
+    }
     if (now - lastClockMs > 1000) {
         lastClockMs = now;
         updateClock();
+        if (curScreen == SC_MEDIA && blecomp::musicPlaying()) updateMediaUI();
         const time_t wall = rtcNowUtc();
         if (wall > 1700000000) meshsvc::setWallClock((uint32_t)wall);
     }
@@ -2102,9 +2438,15 @@ void loop()
             } else {
                 char s[20], t[36], b[80];
                 long id = 0; bool rep = false;
-                if (blecomp::latestNotif(s, sizeof(s), t, sizeof(t), b, sizeof(b), &id, &rep) && (rep || id != 0)) {
+                if (blecomp::latestNotif(s, sizeof(s), t, sizeof(t), b, sizeof(b), &id, &rep)) {
                     wakeScreen();
-                    if (curScreen != SC_NAV && curScreen != SC_MEDIA && !gRideMode) showScreen(SC_NOTIF);
+                    if (curScreen == SC_NAV || curScreen == SC_MEDIA || gRideMode) {
+                        showToast(s, b[0] ? b : t);
+                    } else if (rep || id != 0) {
+                        showScreen(SC_NOTIF);
+                    } else {
+                        showToast(s, b[0] ? b : t);
+                    }
                 }
                 instance.vibrator();
             }

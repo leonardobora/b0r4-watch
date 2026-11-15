@@ -63,6 +63,9 @@ char                   gAlbum[56]   = {0};
 bool                   gPlaying     = false;
 bool                   gShuffle     = false;
 int                    gRepeat      = 0;  // 0=off, 1=all, 2=one
+uint32_t               gTrackDurS   = 0;
+uint32_t               gTrackPosS   = 0;
+uint32_t               gTrackPosAtMs = 0;
 char                   gQueue[6][48] = {{0}};
 int                    gQueueCount  = 0;
 
@@ -110,8 +113,13 @@ void onAmsEntityUpdate(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, 
 
     if (entity == 0 && attr == 1) {
         // Player PlaybackInfo: "<state>,<rate>,<elapsed>" where state '1' = Playing
+        uint32_t elap = 0;
+        const char *c1 = strchr(val, ',');
+        const char *c2 = c1 ? strchr(c1 + 1, ',') : nullptr;
+        if (c2) elap = (uint32_t)atof(c2 + 1);
         portENTER_CRITICAL(&gMux);
         gPlaying = (val[0] == '1');
+        if (c2) { gTrackPosS = elap; gTrackPosAtMs = millis(); }
         gUiDirty = true;
         portEXIT_CRITICAL(&gMux);
     } else if (entity == 0 && attr == 2) {
@@ -127,7 +135,7 @@ void onAmsEntityUpdate(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, 
         gUiDirty = true;
         portEXIT_CRITICAL(&gMux);
     } else if (entity == 2) {
-        // Track: 0=Artist, 1=Album, 2=Title
+        // Track: 0=Artist, 1=Album, 2=Title, 3=Duration
         sanitizePtBrAscii(val);
         portENTER_CRITICAL(&gMux);
         if (attr == 0) {
@@ -137,8 +145,11 @@ void onAmsEntityUpdate(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, 
             strncpy(gAlbum, val, sizeof(gAlbum) - 1);
             gAlbum[sizeof(gAlbum) - 1] = 0;
         } else if (attr == 2) {
+            if (strcmp(gTrack, val) != 0) { gTrackPosS = 0; gTrackPosAtMs = millis(); }
             strncpy(gTrack, val, sizeof(gTrack) - 1);
             gTrack[sizeof(gTrack) - 1] = 0;
+        } else if (attr == 3) {
+            gTrackDurS = (uint32_t)atof(val);
         }
         gUiDirty = true;
         portEXIT_CRITICAL(&gMux);
@@ -492,13 +503,17 @@ void handleLine(const char *raw)
             extractJsonStr(json, "artist", artist, sizeof(artist));
             extractJsonStr(json, "track",  track,  sizeof(track));
             extractJsonStr(json, "album",  album,  sizeof(album));
+            const char *dp = strstr(json, "\"dur\":");
+            uint32_t dur = dp ? (uint32_t)atol(dp + 6) : 0;
             sanitizePtBrAscii(artist);
             sanitizePtBrAscii(track);
             sanitizePtBrAscii(album);
             portENTER_CRITICAL(&gMux);
+            if (strcmp(gTrack, track) != 0) { gTrackPosS = 0; gTrackPosAtMs = millis(); }
+            if (dur > 0) gTrackDurS = dur;
             strncpy(gArtist, artist, sizeof(gArtist) - 1);
             strncpy(gTrack,  track,  sizeof(gTrack) - 1);
-            strncpy(gAlbum,  album,  sizeof(gAlbum) - 1);
+            strncpy(gAlbum,  album,  sizeof(album) - 1);
             gArtist[sizeof(gArtist) - 1] = 0;
             gTrack[sizeof(gTrack) - 1]   = 0;
             gAlbum[sizeof(gAlbum) - 1]   = 0;
@@ -511,8 +526,10 @@ void handleLine(const char *raw)
             bool shufVal = (strstr(json, "\"shuffle\":true") != nullptr);
             bool hasRepStr = extractJsonStr(json, "repeat", repStr, sizeof(repStr));
             const char *repNum = hasRepStr ? nullptr : strstr(json, "\"repeat\":");
+            const char *posP = strstr(json, "\"position\":");
             portENTER_CRITICAL(&gMux);
             if (state[0]) gPlaying = (strcmp(state, "play") == 0);
+            if (posP) { gTrackPosS = (uint32_t)atol(posP + 11); gTrackPosAtMs = millis(); }
             if (hasShuf)  gShuffle = shufVal;
             if (hasRepStr) {
                 if (strcmp(repStr, "one") == 0 || strcmp(repStr, "track") == 0) gRepeat = 2;
@@ -916,8 +933,8 @@ void loop()
                     NimBLERemoteCharacteristic *eu = ams->getCharacteristic(kAmsEntityUpdateUuid);
                     if (eu && eu->canNotify()) {
                         eu->subscribe(true, onAmsEntityUpdate);
-                        const uint8_t subPlayer[] = {0x00, 0x00, 0x01, 0x02};
-                        const uint8_t subTrack[]  = {0x02, 0x00, 0x01, 0x02};
+                        const uint8_t subPlayer[] = {0x00, 0x00, 0x01, 0x02, 0x03};
+                        const uint8_t subTrack[]  = {0x02, 0x00, 0x01, 0x02, 0x03};
                         eu->writeValue(subPlayer, sizeof(subPlayer), true);
                         eu->writeValue(subTrack,  sizeof(subTrack),  true);
                     }
@@ -1193,6 +1210,19 @@ void mediaSnapshot(char *track, size_t tn, char *artist, size_t an,
     if (an)  { strncpy(artist, gArtist, an - 1);  artist[an - 1] = 0; }
     if (aln) { strncpy(album,  gAlbum,  aln - 1); album[aln - 1] = 0; }
     if (playing) *playing = gPlaying;
+    portEXIT_CRITICAL(&gMux);
+}
+
+void mediaProgress(uint32_t *posSec, uint32_t *durSec)
+{
+    portENTER_CRITICAL(&gMux);
+    uint32_t pos = gTrackPosS;
+    if (gPlaying && gTrackPosAtMs > 0) {
+        pos += (millis() - gTrackPosAtMs) / 1000UL;
+    }
+    if (gTrackDurS > 0 && pos > gTrackDurS) pos = gTrackDurS;
+    if (posSec) *posSec = pos;
+    if (durSec) *durSec = gTrackDurS;
     portEXIT_CRITICAL(&gMux);
 }
 

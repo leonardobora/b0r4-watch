@@ -59,6 +59,7 @@ bool        musicShuffle();
 int         musicRepeat();  // 0=off, 1=all, 2=one
 void        mediaSnapshot(char *track, size_t tn, char *artist, size_t an,
                           char *album, size_t aln, bool *playing);
+void        mediaProgress(uint32_t *posSec, uint32_t *durSec);
 void        setMediaLocal(bool playing, const char *artist, const char *track, const char *album);
 int         queueCount();
 const char *queueItem(int idx);
