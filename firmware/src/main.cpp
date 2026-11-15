@@ -378,8 +378,8 @@ static void fillDefaultWallpaper(uint8_t *buf)
             uint8_t b = (uint8_t)((b0 * (100 - mix) + b1 * mix) / 100);
             uint16_t c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
             size_t idx = (size_t)(y * 240 + x) * 2;
-            buf[idx] = (c >> 8) & 0xFF;
-            buf[idx + 1] = c & 0xFF;
+            buf[idx] = c & 0xFF;
+            buf[idx + 1] = (c >> 8) & 0xFF;
         }
     }
 }
@@ -1381,9 +1381,10 @@ static void buildSettings(lv_obj_t *scr)
         mkButton(rrow, txt, 0, 0, 51, 26, cb, &lbl);
         if (lbl) {
             lv_obj_t *b = lv_obj_get_parent(lbl);
-            lv_obj_set_style_border_width(b, on ? 2 : 1, 0);
+            lv_obj_set_style_bg_color(b, on ? colAccent() : colSurface(), 0);
+            lv_obj_set_style_border_width(b, 1, 0);
             lv_obj_set_style_border_color(b, on ? colAccent() : colMuted(), 0);
-            lv_obj_set_style_text_color(lbl, on ? colAccent() : colMuted(), 0);
+            lv_obj_set_style_text_color(lbl, on ? colBg() : colMuted(), 0);
         }
     };
     mkTog("BLE", blecomp::enabled(), [](lv_event_t *) {
@@ -1447,7 +1448,7 @@ static void buildSettings(lv_obj_t *scr)
     lv_label_set_text_fmt(lblTimeoutVal, "%ds", cfgTimeoutS);
     lv_obj_set_style_text_color(lblTimeoutVal, colText(), 0);
 
-    lblAbout = mkLabel(p, "omarchy watch | wifi 0mA", FONT_XS, PALETTES[cfgPalette].muted, 0, 0);
+    lblAbout = mkLabel(p, "b0r4 watch | wifi 0mA", FONT_XS, PALETTES[cfgPalette].muted, 0, 0);
 }
 
 // ----------------------------------------------------------------- UI updaters
