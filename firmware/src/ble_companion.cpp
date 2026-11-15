@@ -663,13 +663,25 @@ class ServerCb : public NimBLEServerCallbacks {
 };
 
 class RxCb : public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic *pChar, NimBLEConnInfo &) override
+    void onWrite(NimBLECharacteristic *pChar, NimBLEConnInfo &connInfo) override
     {
         std::string v = pChar->getValue();
         for (char c : v) {
             if (c == '\n' || c == '\r') {
                 if (gRxLen > 0) {
                     gRxLine[gRxLen] = 0;
+                    if (strncmp(gRxLine, "GB(", 3) == 0) {
+                        std::string addr = connInfo.getIdAddress().toString();
+                        Preferences p;
+                        p.begin("ble_names", false);
+                        if (!p.isKey(addr.c_str())) {
+                            p.putString(addr.c_str(), "Galaxy S21");
+                            portENTER_CRITICAL(&gMux);
+                            gUiDirty = true;
+                            portEXIT_CRITICAL(&gMux);
+                        }
+                        p.end();
+                    }
                     handleLine(gRxLine);
                     gRxLen = 0;
                 }
@@ -910,6 +922,7 @@ void loop()
                         char nm[20] = {0};
                         strncpy(nm, val.c_str(), sizeof(nm) - 1);
                         sanitizePtBrAscii(nm);
+                        if (strcmp(nm, "SM-G991B") == 0) strcpy(nm, "Galaxy S21");
                         if (nm[0]) {
                             Preferences p;
                             p.begin("ble_names", false);

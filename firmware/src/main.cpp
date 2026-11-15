@@ -1,5 +1,5 @@
 /*
- * T-Watch S3 — Omarchy Minimalist Companion Firmware
+ * B0R4 WATCH — T-Watch S3 Companion Firmware
  *
  * Clean, squared-corner (0px radius) wearable UI built for Omarchy + Galaxy S21 BLE.
  * Legacy conference QR, phone SoftAP web server, and Matrix rain screensaver removed.
@@ -126,11 +126,11 @@ static uint32_t  gToastHideAt = 0;
 static lv_obj_t *lblNavEta = nullptr, *lblNavDist = nullptr, *lblNavAction = nullptr, *lblNavInstr = nullptr;
 static lv_obj_t *lblNavHdr = nullptr, *lblNavSpeed = nullptr, *lblNavMusic = nullptr, *lblRideBtn = nullptr;
 static lv_obj_t *wakeShield = nullptr;
-static lv_obj_t *boxNavArrow = nullptr, *lineNavStem = nullptr, *lineNavHead = nullptr;
+static lv_obj_t *boxNavArrow = nullptr, *lineNavStem = nullptr, *lineNavHead = nullptr, *lblNavSym = nullptr;
 static lv_point_precise_t gNavStemPts[4] = {{38, 66}, {38, 16}, {38, 16}, {38, 16}};
 static lv_point_precise_t gNavHeadPts[3] = {{22, 32}, {38, 16}, {54, 32}};
 static lv_obj_t *lblBleState = nullptr, *lblBleInbox = nullptr, *lblBleToggle = nullptr;
-static lv_obj_t *lblNotifTag = nullptr, *lblNotifSrc = nullptr, *lblNotifBody = nullptr;
+static lv_obj_t *lblNotifTag = nullptr, *lblNotifSrc = nullptr, *lblNotifBody = nullptr, *cardNotif = nullptr, *bmNotifReplies = nullptr;
 static lv_obj_t *rowBlePeer[3] = {nullptr, nullptr, nullptr};
 static lv_obj_t *lblBlePeer[3] = {nullptr, nullptr, nullptr};
 static char      gBlePeerAddr[3][20] = {{0}, {0}, {0}};
@@ -542,7 +542,7 @@ static void buildLauncher(lv_obj_t *scr)
     lv_obj_set_style_text_color(sub, colMuted(), 0);
 
     lv_obj_t *grid = lv_obj_create(p);
-    lv_obj_set_size(grid, 224, 174);
+    lv_obj_set_size(grid, 224, 170);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(grid, 0, 0);
     lv_obj_set_style_pad_all(grid, 0, 0);
@@ -551,22 +551,22 @@ static void buildLauncher(lv_obj_t *scr)
     lv_obj_set_style_pad_row(grid, 5, 0);
     lv_obj_set_scrollbar_mode(grid, LV_SCROLLBAR_MODE_OFF);
 
-    struct Tile { const char *title; const char *tag; int screen; bool highlight; };
+    struct Tile { const char *title; const char *tag; int screen; bool highlight; bool show; };
     const Tile kTiles[] = {
-        {"MEDIA",    blecomp::musicPlaying() ? "playing" : "player", SC_MEDIA,    blecomp::musicPlaying()},
-        {"NAV",      blecomp::navActive()    ? "routing" : "gps",    SC_NAV,      blecomp::navActive()},
-        {"MSGS",     blecomp::unreadCount()  ? "unread"  : "reply",  SC_NOTIF,    blecomp::unreadCount() > 0},
-        {"BLE",      blecomp::connected()    ? "linked"  : (blecomp::enabled() ? "adv" : "off"), SC_BLE, false},
-        {"THEMES",   PALETTES[cfgPalette].name,                      SC_THEMES,   false},
-        {"STEPS",    "goal + batt",                                  SC_STEPS,    false},
-        {"TIMER",    gTimerRun ? "running" : "roller",               SC_TIMER,    gTimerRun},
-        {"MESH",     meshsvc::enabled() ? "radio on" : "off",        SC_MESH,     meshsvc::enabled()},
-        {"SETTINGS", "power/lock",                                   SC_SETTINGS, false},
+        {"MEDIA",    blecomp::musicPlaying() ? "playing" : "player", SC_MEDIA,    blecomp::musicPlaying(), true},
+        {"NAV",      blecomp::navActive()    ? "routing" : "ready",  SC_NAV,      blecomp::navActive(),    true},
+        {"MSGS",     blecomp::unreadCount()  ? "unread"  : "inbox",  SC_NOTIF,    blecomp::unreadCount() > 0, true},
+        {"BLE",      blecomp::connected()    ? "linked"  : (blecomp::enabled() ? "adv" : "off"), SC_BLE, false, true},
+        {"STEPS",    "goal + batt",                                  SC_STEPS,    false, true},
+        {"TIMER",    gTimerRun ? "running" : "pomodoro",             SC_TIMER,    gTimerRun, true},
+        {"MESH",     "radio on",                                     SC_MESH,     true, meshsvc::enabled()},
+        {"SETTINGS", "b0r4 / pwr",                                   SC_SETTINGS, false, true},
     };
 
     for (const auto &t : kTiles) {
+        if (!t.show) continue;
         lv_obj_t *b = lv_button_create(grid);
-        lv_obj_set_size(b, 108, 31);
+        lv_obj_set_size(b, 108, 38);
         lv_obj_set_style_bg_color(b, colSurface(), 0);
         lv_obj_set_style_border_width(b, t.highlight ? 2 : 1, 0);
         lv_obj_set_style_border_color(b, t.highlight ? colAccent() : colMuted(), 0);
@@ -807,6 +807,12 @@ static void buildNav(lv_obj_t *scr)
     lv_obj_set_style_line_color(lineNavHead, colAccent(), 0);
     lv_obj_set_style_line_rounded(lineNavHead, false, 0);
 
+    lblNavSym = lv_label_create(boxNavArrow);
+    lv_obj_set_style_text_font(lblNavSym, FONT_XL, 0);
+    lv_obj_set_style_text_color(lblNavSym, colAccent(), 0);
+    lv_obj_center(lblNavSym);
+    lv_obj_add_flag(lblNavSym, LV_OBJ_FLAG_HIDDEN);
+
     // Distance + Action tag on top-right beside the arrow box
     lblNavDist = lv_label_create(p);
     lv_obj_set_width(lblNavDist, 134);
@@ -923,7 +929,8 @@ static void buildNotif(lv_obj_t *scr)
         if (lblNotifTag) lv_label_set_text(lblNotifTag, "[ CLEARED ]");
     }, nullptr);
 
-    lv_obj_t *card = lv_obj_create(p);
+    cardNotif = lv_obj_create(p);
+    lv_obj_t *card = cardNotif;
     lv_obj_set_size(card, 224, 68);
     lv_obj_set_style_bg_color(card, colSurface(), 0);
     lv_obj_set_style_border_width(card, 1, 0);
@@ -939,14 +946,14 @@ static void buildNotif(lv_obj_t *scr)
     lv_label_set_long_mode(lblNotifSrc, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_font(lblNotifSrc, FONT_XS, 0);
     lv_obj_set_style_text_color(lblNotifSrc, colAccent(), 0);
-    lv_label_set_text(lblNotifSrc, "No messages");
+    lv_label_set_text(lblNotifSrc, "No notifications");
 
     lblNotifBody = lv_label_create(card);
     lv_obj_set_width(lblNotifBody, 210);
     lv_label_set_long_mode(lblNotifBody, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(lblNotifBody, FONT_XS, 0);
     lv_obj_set_style_text_color(lblNotifBody, colText(), 0);
-    lv_label_set_text(lblNotifBody, "WhatsApp/S21 messages appear here.");
+    lv_label_set_text(lblNotifBody, "Waiting for notifications...");
 
     // 6 PT-BR Quick Replies via native lv_buttonmatrix
     static const char *kReplyMap[] = {
@@ -954,7 +961,8 @@ static void buildNotif(lv_obj_t *scr)
         "Ja chego", "Sim", "\n",
         "Nao", "Te ligo", ""
     };
-    lv_obj_t *bm = lv_buttonmatrix_create(p);
+    bmNotifReplies = lv_buttonmatrix_create(p);
+    lv_obj_t *bm = bmNotifReplies;
     lv_buttonmatrix_set_map(bm, kReplyMap);
     lv_obj_set_size(bm, 224, 102);
     lv_obj_align(bm, LV_ALIGN_CENTER, 0, 34);
@@ -1352,7 +1360,7 @@ static void buildSettings(lv_obj_t *scr)
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(p, 7, 0);
 
-    mkTag(p, "SETTINGS", 0, 0);
+    mkTag(p, "B0R4 WATCH // SETTINGS", 0, 0);
 
     char tbuf[40];
     snprintf(tbuf, sizeof(tbuf), "scheme: %s  [pick]", PALETTES[cfgPalette].name);
@@ -1368,29 +1376,34 @@ static void buildSettings(lv_obj_t *scr)
     lv_obj_set_flex_flow(rrow, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(rrow, 4, 0);
 
-    char bleLbl[16], meshLbl[16], wrLbl[16], lkLbl[16];
-    snprintf(bleLbl,  sizeof(bleLbl),  "ble:%s",  blecomp::enabled() ? "ON" : "OFF");
-    snprintf(meshLbl, sizeof(meshLbl), "msh:%s",  meshsvc::enabled() ? "ON" : "OFF");
-    snprintf(wrLbl,   sizeof(wrLbl),   "wrs:%s",  cfgWristCtrl       ? "ON" : "OFF");
-    snprintf(lkLbl,   sizeof(lkLbl),   "img:%s",  cfgLockScreen      ? "ON" : "OFF");
-    mkButton(rrow, bleLbl, 0, 0, 51, 26, [](lv_event_t *) {
+    auto mkTog = [&](const char *txt, bool on, lv_event_cb_t cb) {
+        lv_obj_t *lbl = nullptr;
+        mkButton(rrow, txt, 0, 0, 51, 26, cb, &lbl);
+        if (lbl) {
+            lv_obj_t *b = lv_obj_get_parent(lbl);
+            lv_obj_set_style_border_width(b, on ? 2 : 1, 0);
+            lv_obj_set_style_border_color(b, on ? colAccent() : colMuted(), 0);
+            lv_obj_set_style_text_color(lbl, on ? colAccent() : colMuted(), 0);
+        }
+    };
+    mkTog("BLE", blecomp::enabled(), [](lv_event_t *) {
         blecomp::setEnabled(!blecomp::enabled());
         buildUI();
-    }, nullptr);
-    mkButton(rrow, meshLbl, 0, 0, 51, 26, [](lv_event_t *) {
+    });
+    mkTog("MSH", meshsvc::enabled(), [](lv_event_t *) {
         meshsvc::setEnabled(!meshsvc::enabled());
         buildUI();
-    }, nullptr);
-    mkButton(rrow, wrLbl, 0, 0, 51, 26, [](lv_event_t *) {
+    });
+    mkTog("WRS", cfgWristCtrl, [](lv_event_t *) {
         cfgWristCtrl = !cfgWristCtrl;
         prefs.putBool("wrist", cfgWristCtrl);
         buildUI();
-    }, nullptr);
-    mkButton(rrow, lkLbl, 0, 0, 51, 26, [](lv_event_t *) {
+    });
+    mkTog("IMG", cfgLockScreen, [](lv_event_t *) {
         cfgLockScreen = !cfgLockScreen;
         prefs.putBool("lock", cfgLockScreen);
         buildUI();
-    }, nullptr);
+    });
 
     lv_obj_t *brow = lv_obj_create(p);
     lv_obj_set_size(brow, 216, 28);
@@ -1399,8 +1412,12 @@ static void buildSettings(lv_obj_t *scr)
     lv_obj_set_style_pad_all(brow, 0, 0);
     lv_obj_set_flex_flow(brow, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(brow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *bTag = lv_label_create(brow);
+    lv_label_set_text(bTag, "BRT");
+    lv_obj_set_style_text_font(bTag, FONT_XS, 0);
+    lv_obj_set_style_text_color(bTag, colMuted(), 0);
     lv_obj_t *sl = lv_slider_create(brow);
-    lv_obj_set_width(sl, 152);
+    lv_obj_set_width(sl, 126);
     lv_slider_set_range(sl, 10, 255);
     lv_slider_set_value(sl, cfgBright, LV_ANIM_OFF);
     styleSquareSlider(sl);
@@ -1416,8 +1433,12 @@ static void buildSettings(lv_obj_t *scr)
     lv_obj_set_style_pad_all(trow, 0, 0);
     lv_obj_set_flex_flow(trow, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(trow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *tTag = lv_label_create(trow);
+    lv_label_set_text(tTag, "DIM");
+    lv_obj_set_style_text_font(tTag, FONT_XS, 0);
+    lv_obj_set_style_text_color(tTag, colMuted(), 0);
     lv_obj_t *sl2 = lv_slider_create(trow);
-    lv_obj_set_width(sl2, 152);
+    lv_obj_set_width(sl2, 126);
     lv_slider_set_range(sl2, 5, 120);
     lv_slider_set_value(sl2, cfgTimeoutS, LV_ANIM_OFF);
     styleSquareSlider(sl2);
@@ -1549,8 +1570,36 @@ static void setNavArrowGeometry(const char *action)
         gNavStemPts[0] = {40, 66}; gNavStemPts[1] = {40, 16}; gNavStemPts[2] = {40, 16}; gNavStemPts[3] = {40, 16};
         gNavHeadPts[0] = {24, 32}; gNavHeadPts[1] = {40, 16}; gNavHeadPts[2] = {56, 32};
     }
-    if (lineNavStem) lv_line_set_points(lineNavStem, gNavStemPts, 4);
-    if (lineNavHead) lv_line_set_points(lineNavHead, gNavHeadPts, 3);
+    bool useSym = true;
+    const char *sym = LV_SYMBOL_UP;
+    if (a.indexOf("slight_right") >= 0 || a.indexOf("fork_right") >= 0 ||
+        a.indexOf("slight_left") >= 0 || a.indexOf("fork_left") >= 0) {
+        useSym = false;
+    } else if (a.indexOf("uturn") >= 0 || a.indexOf("roundabout") >= 0) {
+        sym = LV_SYMBOL_LOOP;
+    } else if (a.indexOf("right") >= 0) {
+        sym = LV_SYMBOL_RIGHT;
+    } else if (a.indexOf("left") >= 0) {
+        sym = LV_SYMBOL_LEFT;
+    } else if (a.indexOf("finish") >= 0 || a.indexOf("dest") >= 0) {
+        sym = LV_SYMBOL_GPS;
+    }
+    if (lblNavSym) {
+        if (useSym) {
+            lv_label_set_text(lblNavSym, sym);
+            lv_obj_remove_flag(lblNavSym, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(lblNavSym, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (lineNavStem) {
+        if (useSym) lv_obj_add_flag(lineNavStem, LV_OBJ_FLAG_HIDDEN);
+        else { lv_obj_remove_flag(lineNavStem, LV_OBJ_FLAG_HIDDEN); lv_line_set_points(lineNavStem, gNavStemPts, 4); }
+    }
+    if (lineNavHead) {
+        if (useSym) lv_obj_add_flag(lineNavHead, LV_OBJ_FLAG_HIDDEN);
+        else { lv_obj_remove_flag(lineNavHead, LV_OBJ_FLAG_HIDDEN); lv_line_set_points(lineNavHead, gNavHeadPts, 3); }
+    }
 }
 
 static void updateNavUI()
@@ -1580,11 +1629,11 @@ static void updateNavUI()
             act.toUpperCase();
             lv_label_set_text(lblNavAction, act.c_str());
         } else {
-            lv_label_set_text(lblNavAction, active ? "CONTINUE" : "READY");
+            lv_label_set_text(lblNavAction, active ? "CONTINUE" : "NAV READY");
         }
     }
     if (lblNavInstr) {
-        lv_label_set_text(lblNavInstr, (active && instr[0]) ? instr : "Start OsmAnd or Google Maps on S21");
+        lv_label_set_text(lblNavInstr, (active && instr[0]) ? instr : "Waiting for route...");
     }
     if (lblNavSpeed) {
         if (blecomp::gpsValid()) {
@@ -1623,30 +1672,70 @@ static void updateNavUI()
     }
 }
 
+static void shortAppTag(const char *raw, const char **outTag, uint32_t *outCol)
+{
+    String s(raw ? raw : "");
+    s.toLowerCase();
+    if (s.indexOf("insta") >= 0)                          { *outTag = "IG";   *outCol = 0xE1306C; return; }
+    if (s.indexOf("whats") >= 0)                          { *outTag = "WA";   *outCol = 0x25D366; return; }
+    if (s.indexOf("tele") >= 0)                           { *outTag = "TG";   *outCol = 0x2AABEE; return; }
+    if (s.indexOf("disc") >= 0)                           { *outTag = "DC";   *outCol = 0x5865F2; return; }
+    if (s.indexOf("mail") >= 0 || s.indexOf("outl") >= 0) { *outTag = "MAIL"; *outCol = 0x0078D4; return; }
+    if (s.indexOf("sms") >= 0 || s.indexOf("msg") >= 0)   { *outTag = "MSG";  *outCol = PALETTES[cfgPalette].accent; return; }
+    *outTag = (raw && raw[0]) ? raw : "APP";
+    *outCol = PALETTES[cfgPalette].accent;
+}
+
 static void updateNotifUI()
 {
     char src[20] = {0}, title[36] = {0}, body[80] = {0};
     long id = 0; bool canReply = false;
     bool has = blecomp::latestNotif(src, sizeof(src), title, sizeof(title), body, sizeof(body), &id, &canReply);
+    bool iphoneOnly = blecomp::appleConnected() && (blecomp::peerCount() <= 1) && !canReply;
+
+    if (bmNotifReplies && cardNotif) {
+        if (iphoneOnly) {
+            lv_obj_add_flag(bmNotifReplies, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_size(cardNotif, 224, 152);
+        } else {
+            lv_obj_remove_flag(bmNotifReplies, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_size(cardNotif, 224, 68);
+        }
+    }
+    const char *appTag = "APP";
+    uint32_t appCol = PALETTES[cfgPalette].accent;
+    shortAppTag(src, &appTag, &appCol);
+
     if (lblNotifTag) {
         if (!has) {
             lv_label_set_text(lblNotifTag, "[ IDLE ]");
             lv_obj_set_style_text_color(lblNotifTag, colMuted(), 0);
+        } else if (iphoneOnly) {
+            lv_label_set_text_fmt(lblNotifTag, "[ %s ]", appTag);
+            lv_obj_set_style_text_color(lblNotifTag, lv_color_hex(appCol), 0);
         } else if (canReply || id != 0) {
-            lv_label_set_text(lblNotifTag, "[ REPLY ]");
-            lv_obj_set_style_text_color(lblNotifTag, colAccent(), 0);
+            lv_label_set_text_fmt(lblNotifTag, "[ %s REPLY ]", appTag);
+            lv_obj_set_style_text_color(lblNotifTag, lv_color_hex(appCol), 0);
         } else {
-            lv_label_set_text(lblNotifTag, "[ READ ]");
-            lv_obj_set_style_text_color(lblNotifTag, colMuted(), 0);
+            lv_label_set_text_fmt(lblNotifTag, "[ %s ]", appTag);
+            lv_obj_set_style_text_color(lblNotifTag, lv_color_hex(appCol), 0);
         }
     }
+    if (cardNotif) {
+        lv_obj_set_style_border_color(cardNotif, has ? lv_color_hex(appCol) : colMuted(), 0);
+    }
     if (lblNotifSrc) {
-        if (has) lv_label_set_text_fmt(lblNotifSrc, "%s%s%s", src[0] ? src : "Msg", title[0] ? ": " : "", title);
-        else     lv_label_set_text(lblNotifSrc, "No messages");
+        if (has) {
+            lv_label_set_text_fmt(lblNotifSrc, "%s%s%s", appTag, title[0] ? ": " : "", title);
+            lv_obj_set_style_text_color(lblNotifSrc, lv_color_hex(appCol), 0);
+        } else {
+            lv_label_set_text(lblNotifSrc, "No notifications");
+            lv_obj_set_style_text_color(lblNotifSrc, colMuted(), 0);
+        }
     }
     if (lblNotifBody) {
         if (has) lv_label_set_text(lblNotifBody, body[0] ? body : "(empty)");
-        else     lv_label_set_text(lblNotifBody, "WhatsApp/S21 messages appear here.");
+        else     lv_label_set_text(lblNotifBody, "Waiting for notifications...");
     }
 }
 
@@ -1810,15 +1899,27 @@ static void showScreen(int idx)
     }
 }
 
+static bool isScreenInSwipe(int s)
+{
+    if (s == SC_LOCK || s == SC_THEMES) return false;
+    if (s == SC_NAV && !blecomp::navActive()) return false;
+    if (s == SC_MESH && !meshsvc::enabled()) return false;
+    return true;
+}
+
 static void onNext(lv_event_t *) {
-    int n = curScreen + 1;
-    if (n == SC_LOCK) n = SC_WATCH;
-    showScreen(n);
+    int n = curScreen;
+    for (int k = 0; k < SC_COUNT; k++) {
+        n = (n + 1) % SC_COUNT;
+        if (isScreenInSwipe(n)) { showScreen(n); return; }
+    }
 }
 static void onPrev(lv_event_t *) {
-    int n = curScreen - 1;
-    if (n < 0 || n == SC_LOCK) n = SC_SETTINGS;
-    showScreen(n);
+    int n = curScreen;
+    for (int k = 0; k < SC_COUNT; k++) {
+        n = (n - 1 + SC_COUNT) % SC_COUNT;
+        if (isScreenInSwipe(n)) { showScreen(n); return; }
+    }
 }
 
 static void pollSwipe()
@@ -1858,6 +1959,10 @@ static void pollSwipe()
             instance.vibrator();
             showScreen(SC_WATCH);
         }
+        return;
+    }
+    if (curScreen != SC_SETTINGS && dy >= 42 && ady > adx) {
+        showScreen(SC_WATCH);
         return;
     }
     if (!kSwipeOk[curScreen]) return;
@@ -2137,6 +2242,7 @@ static void enterDeepOff()
 
 static void wakeScreen()
 {
+    bool wasDeep = deepOff;
     if (deepOff) {
         setCpuFrequencyMhz(240);
         instance.LilyGoDispSPI::wakeup();
@@ -2145,7 +2251,7 @@ static void wakeScreen()
     dimmed  = false;
     deepOff = false;
     if (wakeShield) lv_obj_add_flag(wakeShield, LV_OBJ_FLAG_HIDDEN);
-    if (cfgLockScreen && !gRideMode && curScreen != SC_LOCK && curScreen != SC_TIMER) {
+    if (wasDeep && cfgLockScreen && !gRideMode && curScreen != SC_LOCK && curScreen != SC_TIMER) {
         showScreen(SC_LOCK);
     }
     instance.setBrightness(cfgBright);
@@ -2201,7 +2307,7 @@ void setup()
 {
     Serial.begin(115200);
     delay(200);
-    Serial.println("\n[watch] LilyGo T-Watch S3 — Omarchy Minimalist Companion");
+    Serial.println("\n[watch] LilyGo B0R4 WATCH — T-Watch S3 Companion");
 
     WiFi.mode(WIFI_OFF);  // Strict 0 mA Wi-Fi idle baseline; no SoftAP web server
 
@@ -2317,7 +2423,10 @@ void loop()
     BMASensorRuntimeStatus_t bma = instance.getRuntimeStatus();
     if (bma.tiltEvents != gTiltSeen) {
         gTiltSeen = bma.tiltEvents;
-        if (cfgWristCtrl) wakeScreen();
+        if (cfgWristCtrl) {
+            if (dimmed || deepOff) wakeScreen();
+            else lv_display_trigger_activity(nullptr);
+        }
     }
     if (bma.doubleTaps != gDoubleTapSeen) {
         gDoubleTapSeen = bma.doubleTaps;
