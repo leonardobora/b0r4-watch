@@ -20,6 +20,8 @@
 #include <FFat.h>
 #include <WiFi.h>
 #include <esp_mac.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
 #include <time.h>
 
 #include "ble_companion.h"
@@ -2304,6 +2306,28 @@ static void handleSerial()
                     blecomp::setWeatherLocal(tc, cond.c_str());
                     updateWatchLinkUI();
                     Serial.printf("[wx] %dC %s\n", tc, cond.c_str());
+                } else if (serialBuf == "BLOG") {
+                    File f = FFat.open("/blog.txt", "r");
+                    if (f) {
+                        Serial.println("[blog] begin");
+                        while (f.available()) Serial.write((uint8_t)f.read());
+                        Serial.println("[blog] end");
+                        f.close();
+                    } else {
+                        Serial.println("[blog] empty");
+                    }
+                } else if (serialBuf == "BLOGCLR") {
+                    FFat.remove("/blog.txt");
+                    Serial.println("[blog] cleared");
+                } else if (serialBuf == "SLPTEST") {
+                    int before = blecomp::peerCount();
+                    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+                    esp_sleep_enable_timer_wakeup(250000ULL);
+                    for (int i = 0; i < 8; i++) {
+                        esp_light_sleep_start();
+                    }
+                    int after = blecomp::peerCount();
+                    Serial.printf("[slptest] 8x250ms light_sleep peers_before=%d peers_after=%d\n", before, after);
                 } else if (serialBuf == "W" || serialBuf == "w") {
                     Serial.printf("[status] batt=%.0f%% %.0fmV  steps=%lu  screen=%d  ble=%d  peers=%d  mesh=%d  cpu=%luMHz\n",
                                   instance.getBatteryPercent(), instance.getBattVoltage(),
@@ -2463,6 +2487,10 @@ static void enterDeepOff()
     if (wakeShield) lv_obj_remove_flag(wakeShield, LV_OBJ_FLAG_HIDDEN);
     instance.setBrightness(0);
     instance.powerControl(POWER_DISPLAY_BACKLIGHT, false);  // cut ALDO2 boost quiescent draw
+    instance.powerControl(POWER_HAPTIC_DRIVER, false);
+    instance.powerControl(POWER_GPS, false);
+    instance.powerControl(POWER_SPEAK, false);
+    instance.powerControl(POWER_NFC, false);
     instance.LilyGoDispSPI::sleep();
     setCpuFrequencyMhz(80);
 }
@@ -2474,6 +2502,7 @@ static void wakeScreen()
         setCpuFrequencyMhz(240);
         instance.LilyGoDispSPI::wakeup();
         instance.powerControl(POWER_DISPLAY_BACKLIGHT, true);
+        instance.powerControl(POWER_HAPTIC_DRIVER, true);
     }
     dimmed  = false;
     deepOff = false;
@@ -2850,5 +2879,21 @@ void loop()
         }
     }
 
-    delay(deepOff ? (instance.isCharging() ? 25 : 65) : 5);
+    if (deepOff && !instance.pmic.isVbusGood() && !meshsvc::enabled()) {
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+        esp_sleep_disable_ext1_wakeup_io(0);
+        uint64_t mask = (1ULL << TP_INT) | (1ULL << PMU_INT);
+        rtc_gpio_pullup_en((gpio_num_t)PMU_INT);
+        esp_sleep_enable_ext1_wakeup_io(mask, ESP_EXT1_WAKEUP_ANY_LOW);
+        uint64_t us = blecomp::connected() ? 250000ULL : 2000000ULL;
+        esp_sleep_enable_timer_wakeup(us);
+        esp_light_sleep_start();
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+        esp_sleep_disable_ext1_wakeup_io(0);
+        if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+            wakeScreen();
+        }
+    } else {
+        delay(deepOff ? (instance.isCharging() ? 25 : 65) : 5);
+    }
 }
