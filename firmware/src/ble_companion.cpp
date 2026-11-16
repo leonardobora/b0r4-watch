@@ -1237,6 +1237,8 @@ void inboxSummary(char *out, size_t n)
 }
 
 bool weatherActive() { return gWeatherOk; }
+int  weatherTempC()  { return gWeatherC; }
+const char *weatherCond() { return gWeatherCond[0] ? gWeatherCond : "CLR"; }
 
 void weatherSummary(char *out, size_t n)
 {

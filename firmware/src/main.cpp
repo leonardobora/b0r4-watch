@@ -103,7 +103,7 @@ static lv_obj_t *screens[SC_COUNT] = {};
 static int       curScreen         = SC_WATCH;
 
 // Widgets
-static lv_obj_t *lblLinkFace = nullptr, *lblWeather = nullptr, *lblDate = nullptr, *lblTime = nullptr, *lblSeconds = nullptr;
+static lv_obj_t *lblLinkFace = nullptr, *boxWx = nullptr, *lblWeather = nullptr, *lblDate = nullptr, *lblTime = nullptr, *lblSeconds = nullptr;
 static lv_obj_t *lblBattery = nullptr, *barBattery = nullptr, *lblStepsFace = nullptr;
 static lv_obj_t *lblMediaState = nullptr, *lblMediaTrack = nullptr, *lblMediaArtist = nullptr;
 static lv_obj_t *lblMediaAlbum = nullptr, *boxMediaCard = nullptr, *btnMediaPlay = nullptr, *lblMediaPlay = nullptr;
@@ -440,10 +440,18 @@ static void buildWatch(lv_obj_t *scr)
     lv_obj_align(lblLinkFace, LV_ALIGN_TOP_LEFT, 2, 0);
     lv_label_set_text(lblLinkFace, "ble");
 
+    boxWx = lv_obj_create(p);
+    lv_obj_set_size(boxWx, 14, 12);
+    lv_obj_align(boxWx, LV_ALIGN_TOP_LEFT, 58, 1);
+    lv_obj_set_style_bg_opa(boxWx, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(boxWx, 0, 0);
+    lv_obj_set_style_pad_all(boxWx, 0, 0);
+    lv_obj_clear_flag(boxWx, LV_OBJ_FLAG_SCROLLABLE);
+
     lblWeather = lv_label_create(p);
     lv_obj_set_style_text_font(lblWeather, FONT_XS, 0);
     lv_obj_set_style_text_color(lblWeather, colText(), 0);
-    lv_obj_align(lblWeather, LV_ALIGN_TOP_LEFT, 58, 0);
+    lv_obj_align(lblWeather, LV_ALIGN_TOP_LEFT, 75, 0);
     lv_label_set_text(lblWeather, "");
 
     lblBattery = lv_label_create(p);
@@ -1473,6 +1481,54 @@ static void buildSettings(lv_obj_t *scr)
 }
 
 // ----------------------------------------------------------------- UI updaters
+static void drawWeatherIcon(const char *cond)
+{
+    if (!boxWx) return;
+    static char s_lastCond[12] = {0};
+    if (strcmp(s_lastCond, cond ? cond : "") == 0) return;
+    strncpy(s_lastCond, cond ? cond : "", sizeof(s_lastCond) - 1);
+    lv_obj_clean(boxWx);
+    if (!cond || !cond[0]) return;
+
+    auto mkDot = [&](int x, int y, int w, int h, int rad, uint32_t hex) {
+        lv_obj_t *r = lv_obj_create(boxWx);
+        lv_obj_set_pos(r, x, y);
+        lv_obj_set_size(r, w, h);
+        lv_obj_set_style_bg_color(r, lv_color_hex(hex), 0);
+        lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(r, 0, 0);
+        lv_obj_set_style_radius(r, rad, 0);
+        lv_obj_set_style_pad_all(r, 0, 0);
+        lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+    };
+
+    if (!strcmp(cond, "SUN") || !strcmp(cond, "CLR")) {
+        mkDot(4, 3, 6, 6, 3, 0xFFD60A);
+        mkDot(6, 0, 2, 2, 0, 0xFFD60A);
+        mkDot(6, 10, 2, 2, 0, 0xFFD60A);
+        mkDot(1, 5, 2, 2, 0, 0xFFD60A);
+        mkDot(11, 5, 2, 2, 0, 0xFFD60A);
+    } else if (!strcmp(cond, "RAIN")) {
+        mkDot(3, 1, 7, 5, 2, 0x9BA3AE);
+        mkDot(1, 3, 12, 4, 2, 0x9BA3AE);
+        mkDot(3, 8, 1, 3, 0, 0x38BDF8);
+        mkDot(7, 9, 1, 3, 0, 0x38BDF8);
+        mkDot(10, 8, 1, 3, 0, 0x38BDF8);
+    } else if (!strcmp(cond, "STRM")) {
+        mkDot(3, 1, 7, 5, 2, 0x7D8590);
+        mkDot(1, 3, 12, 4, 2, 0x7D8590);
+        mkDot(6, 7, 3, 2, 0, 0xFFD60A);
+        mkDot(5, 9, 3, 2, 0, 0xFFD60A);
+    } else if (!strcmp(cond, "FOG")) {
+        mkDot(2, 2, 10, 1, 0, 0x8B949E);
+        mkDot(1, 5, 12, 1, 0, 0x8B949E);
+        mkDot(3, 8, 9, 1, 0, 0x8B949E);
+    } else { // CLD
+        mkDot(4, 2, 7, 5, 2, 0xC9D1D9);
+        mkDot(1, 5, 12, 5, 2, 0xC9D1D9);
+    }
+}
+
 static void updateWatchLinkUI()
 {
     if (lblLinkFace) {
@@ -1489,10 +1545,15 @@ static void updateWatchLinkUI()
         }
     }
     if (lblWeather) {
-        char wb[24] = {0};
-        blecomp::weatherSummary(wb, sizeof(wb));
-        lv_label_set_text(lblWeather, wb[0] ? wb : "--");
-        lv_obj_set_style_text_color(lblWeather, wb[0] ? colText() : colMuted(), 0);
+        if (blecomp::weatherActive()) {
+            drawWeatherIcon(blecomp::weatherCond());
+            lv_label_set_text_fmt(lblWeather, "%d°C", blecomp::weatherTempC());
+            lv_obj_set_style_text_color(lblWeather, colText(), 0);
+        } else {
+            drawWeatherIcon("");
+            lv_label_set_text(lblWeather, "--");
+            lv_obj_set_style_text_color(lblWeather, colMuted(), 0);
+        }
     }
     if (lblStepsFace) {
         uint32_t un = blecomp::unreadCount();

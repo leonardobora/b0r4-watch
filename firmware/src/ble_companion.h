@@ -52,6 +52,8 @@ bool        latestNotif(char *src, size_t sn, char *title, size_t tn,
 bool        sendNotifReply(long id, const char *msg);
 bool        sendNotifDismiss(long id);
 bool        weatherActive();
+int         weatherTempC();
+const char *weatherCond();
 void        weatherSummary(char *out, size_t n);
 void        setWeatherLocal(int tempC, const char *txt);
 const char *musicTrack();
