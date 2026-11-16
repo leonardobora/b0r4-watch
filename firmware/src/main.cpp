@@ -2334,6 +2334,24 @@ static void onPmuEvent(const DeviceEvent &ev, void *)
     else if (pt == PMU_EVENT_KEY_LONG_PRESSED) gBtnLong  = true;
 }
 
+static void playTonePair(int f1, int f2, int totalMs)
+{
+    static constexpr int kRate = 16000;
+    int samples = (kRate * totalMs) / 1000;
+    if (samples > 3200) samples = 3200;
+    static int16_t pcm[3200];
+    if (instance._audioOutput.open(16, 1, kRate)) {
+        instance._audioOutput.setVolume(72);
+        for (int i = 0; i < samples; i++) {
+            int freq = (i < samples / 2) ? f1 : f2;
+            int period = kRate / (freq > 0 ? freq : 440);
+            pcm[i] = ((i % period) < (period / 2)) ? 8000 : -8000;
+        }
+        instance._audioOutput.write((const uint8_t *)pcm, (size_t)samples * sizeof(int16_t));
+        instance._audioOutput.close();
+    }
+}
+
 static void playNavCue(const char *action)
 {
     String a(action ? action : "");
@@ -2426,7 +2444,28 @@ void setup()
     instance.onEvent(POWER_EVENT, onPmuEvent);
 
     instance.setBrightness(cfgBright);
-    buildUI();
+    {
+        lv_obj_t *splash = lv_obj_create(nullptr);
+        lv_obj_set_style_bg_color(splash, colBg(), 0);
+        lv_obj_set_style_bg_opa(splash, LV_OPA_COVER, 0);
+        lv_obj_t *st = lv_label_create(splash);
+        lv_label_set_text(st, "B0R4 Watch");
+        lv_obj_set_style_text_font(st, FONT_L, 0);
+        lv_obj_set_style_text_color(st, colAccent(), 0);
+        lv_obj_align(st, LV_ALIGN_CENTER, 0, -18);
+        lv_obj_t *sm = lv_label_create(splash);
+        lv_label_set_text(sm, ":)");
+        lv_obj_set_style_text_font(sm, FONT_XL, 0);
+        lv_obj_set_style_text_color(sm, colText(), 0);
+        lv_obj_align(sm, LV_ALIGN_CENTER, 0, 26);
+        lv_screen_load(splash);
+        lv_timer_handler();
+        playTonePair(660, 988, 130);
+        delay(850);
+        if (cfgLockScreen) curScreen = SC_LOCK;
+        buildUI();
+        lv_obj_delete(splash);
+    }
 
     instance.bma423.selectPlatform(SensorBMA423::Platform::WRISTBAND);
     instance.bma423.enableTiltDetector(true, true, InterruptPinMap::PIN1);
@@ -2465,6 +2504,7 @@ void loop()
         } else if (curScreen != SC_WATCH && curScreen != SC_LOCK) {
             showScreen(SC_WATCH);
         } else {
+            playTonePair(880, 523, 110);
             enterDeepOff();
         }
     }
