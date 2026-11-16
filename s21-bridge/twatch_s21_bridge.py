@@ -131,7 +131,7 @@ def sync_clock_payload() -> str:
     return f"setTime({now});E.setTimeZone({tz_off_hr:.2f})\n"
 
 
-def fetch_weather_payload(lat: float = -25.43, lon: float = -49.27) -> str | None:
+def fetch_weather_data(lat: float = -25.43, lon: float = -49.27) -> dict | None:
     try:
         url = (
             f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
@@ -143,20 +143,58 @@ def fetch_weather_payload(lat: float = -25.43, lon: float = -49.27) -> str | Non
         temp_c = round(float(cur["temperature_2m"]))
         code = int(cur.get("weather_code", 0))
         if code == 0:
-            txt = "Clear"
+            txt, owm = "Clear", 800
         elif code in (1, 2, 3):
-            txt = "Cloudy"
+            txt, owm = "Cloudy", 803
         elif code in (45, 48):
-            txt = "Fog"
+            txt, owm = "Fog", 741
         elif code in (71, 73, 75, 77, 85, 86):
-            txt = "Snow"
+            txt, owm = "Snow", 600
         elif code >= 95:
-            txt = "Storm"
+            txt, owm = "Storm", 200
         else:
-            txt = "Rain"
-        return f'GB({{"t":"weather","temp":{temp_c},"txt":"{txt}"}})\n'
+            txt, owm = "Rain", 500
+        return {"temp_c": temp_c, "txt": txt, "owm": owm}
     except Exception:
         return None
+
+
+def fetch_weather_payload(lat: float = -25.43, lon: float = -49.27) -> str | None:
+    w = fetch_weather_data(lat, lon)
+    if not w:
+        return None
+    return f'GB({{"t":"weather","temp":{w["temp_c"]},"txt":"{w["txt"]}"}})\n'
+
+
+def push_weather_to_gadgetbridge(lat: float = -25.43, lon: float = -49.27) -> bool:
+    w = fetch_weather_data(lat, lon)
+    if not w:
+        return False
+    payload = json.dumps({
+        "timestamp": int(time.time()),
+        "location": "Curitiba",
+        "currentTemp": w["temp_c"] + 273,
+        "currentConditionCode": w["owm"],
+        "currentCondition": w["txt"],
+        "todayMaxTemp": w["temp_c"] + 276,
+        "todayMinTemp": w["temp_c"] + 269,
+        "currentHumidity": 65,
+        "windSpeed": 8.0,
+        "windDirection": 90,
+    }, separators=(",", ":"))
+    r = subprocess.run(
+        [
+            "am", "broadcast",
+            "-a", "nodomain.freeyourgadget.gadgetbridge.ACTION_GENERIC_WEATHER",
+            "-n", "nodomain.freeyourgadget.gadgetbridge/.externalevents.GenericWeatherReceiver",
+            "--es", "WeatherJson", payload,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=6,
+        check=False,
+    )
+    return r.returncode == 0
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -290,6 +328,18 @@ async def ble_loop() -> None:
                     RSSI_HIST.append(best_rssi)
                     save_state()
                     await asyncio.sleep(1.0)
+        except ModuleNotFoundError:
+            with LOCK:
+                STATE["connected"] = False
+                STATE["transport"] = "gadgetbridge-intent-mode (Open-Meteo -> Gadgetbridge every 30m)"
+            save_state()
+            while True:
+                ok = push_weather_to_gadgetbridge()
+                with LOCK:
+                    STATE["last_seen"] = dt.datetime.now().isoformat(timespec="seconds")
+                    STATE["last_watch_event"] = f"weather->gb:{'ok' if ok else 'err'}"
+                save_state()
+                await asyncio.sleep(1800.0)
         except Exception as exc:
             with LOCK:
                 STATE["connected"] = False
