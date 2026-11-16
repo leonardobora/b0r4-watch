@@ -17,7 +17,7 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
-#include <LittleFS.h>
+#include <FFat.h>
 #include <WiFi.h>
 #include <esp_mac.h>
 #include <time.h>
@@ -126,6 +126,8 @@ static uint32_t  gToastHideAt = 0;
 
 // Pull-down-to-home spring handle (lv_layer_top)
 static lv_obj_t *boxPullHome = nullptr, *lblPullHome = nullptr;
+static lv_obj_t *rowPageDots[SC_COUNT] = {};
+static uint32_t  gNotifTickerUntil = 0;
 static lv_obj_t *lblNavEta = nullptr, *lblNavDist = nullptr, *lblNavAction = nullptr, *lblNavInstr = nullptr;
 static lv_obj_t *lblNavHdr = nullptr, *lblNavSpeed = nullptr, *lblNavMusic = nullptr, *lblRideBtn = nullptr;
 static lv_obj_t *wakeShield = nullptr;
@@ -176,6 +178,7 @@ static void updateWatchLinkUI();
 static void updateMediaUI();
 static void updateSteps();
 static void updateNavUI();
+static void updateNotifUI();
 static void updateBleUI();
 static void updateMeshUI();
 
@@ -393,8 +396,8 @@ static void initLockWallpaper()
     if (!gLockBuf) gLockBuf = (uint8_t *)ps_malloc(kImgBytes);
     if (!gLockBuf) return;
     bool loaded = false;
-    if (LittleFS.exists("/lock.bin")) {
-        File f = LittleFS.open("/lock.bin", "r");
+    if (FFat.exists("/lock.bin")) {
+        File f = FFat.open("/lock.bin", "r");
         if (f && f.size() == kImgBytes) {
             size_t n = f.read(gLockBuf, kImgBytes);
             loaded = (n == kImgBytes);
@@ -923,14 +926,7 @@ static void buildNotif(lv_obj_t *scr)
     lv_obj_set_style_text_font(lblNotifTag, FONT_XS, 0);
     lv_obj_set_style_text_color(lblNotifTag, colMuted(), 0);
 
-    mkButton(hdrRow, LV_SYMBOL_TRASH, 0, 0, 32, 20, [](lv_event_t *) {
-        char s[20], t[36], b[80];
-        long id = 0; bool rep = false;
-        blecomp::latestNotif(s, sizeof(s), t, sizeof(t), b, sizeof(b), &id, &rep);
-        blecomp::sendNotifDismiss(id);
-        blecomp::clearUnread();
-        if (lblNotifTag) lv_label_set_text(lblNotifTag, "[ CLEARED ]");
-    }, nullptr);
+
 
     cardNotif = lv_obj_create(p);
     lv_obj_t *card = cardNotif;
@@ -958,16 +954,15 @@ static void buildNotif(lv_obj_t *scr)
     lv_obj_set_style_text_color(lblNotifBody, colText(), 0);
     lv_label_set_text(lblNotifBody, "Waiting for notifications...");
 
-    // 6 PT-BR Quick Replies via native lv_buttonmatrix
+    // 4 PT-BR Quick Replies via native lv_buttonmatrix
     static const char *kReplyMap[] = {
         "OK", "To indo", "\n",
-        "Ja chego", "Sim", "\n",
-        "Nao", "Te ligo", ""
+        "Sim", "Nao", ""
     };
     bmNotifReplies = lv_buttonmatrix_create(p);
     lv_obj_t *bm = bmNotifReplies;
     lv_buttonmatrix_set_map(bm, kReplyMap);
-    lv_obj_set_size(bm, 224, 102);
+    lv_obj_set_size(bm, 224, 68);
     lv_obj_align(bm, LV_ALIGN_CENTER, 0, 34);
     lv_obj_set_style_bg_opa(bm, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bm, 0, 0);
@@ -996,6 +991,18 @@ static void buildNotif(lv_obj_t *scr)
         }
         instance.vibrator();
     }, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    mkButton(p, LV_SYMBOL_TRASH " CLEAR", 0, 0, 132, 28, [](lv_event_t *) {
+        char s[20], t[36], b[80];
+        long id = 0; bool rep = false;
+        blecomp::latestNotif(s, sizeof(s), t, sizeof(t), b, sizeof(b), &id, &rep);
+        blecomp::sendNotifDismiss(id);
+        blecomp::clearUnread();
+        gNotifTickerUntil = 0;
+        updateNotifUI();
+        updateWatchLinkUI();
+        instance.vibrator();
+    }, nullptr);
 }
 
 static void buildBle(lv_obj_t *scr)
@@ -1471,10 +1478,16 @@ static void updateWatchLinkUI()
         }
     }
     if (lblStepsFace) {
+        uint32_t un = blecomp::unreadCount();
         char line[128] = {0};
         blecomp::latestLine(line, sizeof(line));
-        if (line[0]) {
+        if (line[0] && (un == 0 || (gNotifTickerUntil && millis() < gNotifTickerUntil))) {
             lv_label_set_text(lblStepsFace, line);
+            lv_obj_set_style_text_color(lblStepsFace, colAccent(), 0);
+        } else if (un > 0) {
+            lv_label_set_text_fmt(lblStepsFace, "%lu unread | %lu steps",
+                                  (unsigned long)un,
+                                  (unsigned long)instance.getStepCounter());
             lv_obj_set_style_text_color(lblStepsFace, colAccent(), 0);
         } else {
             lv_label_set_text_fmt(lblStepsFace, "%lu steps | %s",
@@ -1891,6 +1904,8 @@ static void updateSteps()
 }
 
 // ----------------------------------------------------------------- navigation
+static void updatePageDots();
+
 static void showScreen(int idx)
 {
     if (idx < 0) idx = SC_COUNT - 1;
@@ -1900,6 +1915,29 @@ static void showScreen(int idx)
         if (!screens[i]) continue;
         if (i == idx) lv_obj_remove_flag(screens[i], LV_OBJ_FLAG_HIDDEN);
         else          lv_obj_add_flag(screens[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    updatePageDots();
+}
+
+static bool isScreenInSwipe(int s);
+
+static void updatePageDots()
+{
+    for (int i = 0; i < SC_COUNT; i++) {
+        lv_obj_t *row = rowPageDots[i];
+        if (!row) continue;
+        lv_obj_clean(row);
+        if (!isScreenInSwipe(i) && i != curScreen) continue;
+        for (int s = 0; s < SC_COUNT; s++) {
+            if (!isScreenInSwipe(s)) continue;
+            lv_obj_t *d = lv_obj_create(row);
+            bool act = (s == curScreen);
+            lv_obj_set_size(d, act ? 10 : 5, act ? 4 : 3);
+            lv_obj_set_style_bg_color(d, act ? colAccent() : colMuted(), 0);
+            lv_obj_set_style_border_width(d, 0, 0);
+            lv_obj_set_style_radius(d, 0, 0);
+            lv_obj_set_style_pad_all(d, 0, 0);
+        }
     }
 }
 
@@ -2119,7 +2157,7 @@ static void handleSerial()
                             }
                         }
                         if (got == expect) {
-                            File f = LittleFS.open("/lock.bin", "w");
+                            File f = FFat.open("/lock.bin", "w");
                             if (f) { f.write(gLockBuf, expect); f.close(); }
                             gLockReady = true;
                             lv_image_cache_drop(&gLockDsc);
@@ -2233,6 +2271,19 @@ static void buildUI()
         lv_label_set_text(rr, LV_SYMBOL_RIGHT);
         lv_obj_set_style_text_color(rr, colText(), 0);
         lv_obj_center(rr);
+
+        lv_obj_t *dots = lv_obj_create(screens[i]);
+        lv_obj_set_size(dots, 140, 10);
+        lv_obj_align(dots, LV_ALIGN_BOTTOM_MID, 0, -10);
+        lv_obj_set_style_bg_opa(dots, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(dots, 0, 0);
+        lv_obj_set_style_pad_all(dots, 0, 0);
+        lv_obj_set_flex_flow(dots, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(dots, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(dots, 3, 0);
+        lv_obj_set_scrollbar_mode(dots, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_remove_flag(dots, LV_OBJ_FLAG_CLICKABLE);
+        rowPageDots[i] = dots;
     }
 
     showScreen(curScreen);
@@ -2419,7 +2470,7 @@ void setup()
     cfgTimeoutS  = prefs.getInt("timeout", cfgTimeoutS);
     cfgWristCtrl = prefs.getBool("wrist", true);
     cfgLockScreen  = prefs.getBool("lock", true);
-    LittleFS.begin(true);
+    FFat.begin(true);
     {
         int tzStored = prefs.getInt("tz", cfgTzOffsetMin);
         cfgTzOffsetMin = (tzStored > -15 && tzStored < 15) ? tzStored * 60 : tzStored;
@@ -2516,14 +2567,17 @@ void loop()
         gBtnLong = false;
         bool wasSleeping = (deepOff || dimmed);
         wakeScreen();
-        if (bikeCtx || (!wasSleeping && curScreen == SC_MEDIA)) {
+        if (curScreen == SC_LOCK) {
+            instance.vibrator();
+        } else if (bikeCtx || (!wasSleeping && curScreen == SC_MEDIA)) {
             blecomp::sendMusicCmd(blecomp::musicPlaying() ? "pause" : "play");
             updateMediaUI();
             updateNavUI();
+            instance.vibrator();
         } else {
             showScreen(SC_MEDIA);
+            instance.vibrator();
         }
-        instance.vibrator();
     }
 
     uint32_t sc = instance.getStepCounter();
@@ -2599,6 +2653,10 @@ void loop()
             updateTimerUI();
         }
     }
+    if (gNotifTickerUntil && now > gNotifTickerUntil) {
+        gNotifTickerUntil = 0;
+        updateWatchLinkUI();
+    }
     if (now - lastClockMs > 1000) {
         lastClockMs = now;
         updateClock();
@@ -2663,6 +2721,7 @@ void loop()
                 char s[20], t[36], b[80];
                 long id = 0; bool rep = false;
                 if (blecomp::latestNotif(s, sizeof(s), t, sizeof(t), b, sizeof(b), &id, &rep)) {
+                    gNotifTickerUntil = millis() + 12000UL;
                     wakeScreen();
                     if (curScreen == SC_NAV || curScreen == SC_MEDIA || gRideMode) {
                         showToast(s, b[0] ? b : t);
