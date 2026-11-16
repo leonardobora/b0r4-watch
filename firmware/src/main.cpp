@@ -513,7 +513,7 @@ static void buildWatch(lv_obj_t *scr)
     lv_obj_align(lblStepsFace, LV_ALIGN_BOTTOM_LEFT, 2, -2);
     lv_label_set_text(lblStepsFace, "STP 0");
 
-    mkButton(p, ":: apps", 0, 95, 96, 24, [](lv_event_t *) {
+    mkButton(p, ":: apps", 0, 91, 96, 24, [](lv_event_t *) {
         showScreen(SC_LAUNCHER);
     }, nullptr);
 }
@@ -2273,8 +2273,8 @@ static void buildUI()
         lv_obj_center(rr);
 
         lv_obj_t *dots = lv_obj_create(screens[i]);
-        lv_obj_set_size(dots, 140, 10);
-        lv_obj_align(dots, LV_ALIGN_BOTTOM_MID, 0, -10);
+        lv_obj_set_size(dots, 140, 8);
+        lv_obj_align(dots, LV_ALIGN_BOTTOM_MID, 0, -3);
         lv_obj_set_style_bg_opa(dots, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(dots, 0, 0);
         lv_obj_set_style_pad_all(dots, 0, 0);
