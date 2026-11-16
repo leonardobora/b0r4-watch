@@ -56,6 +56,9 @@ static int  cfgTimeoutS    = 15;
 static int  cfgTzOffsetMin = -180;  // UTC-03 (Brazil)
 static bool cfgWristCtrl   = true;
 static bool cfgLockScreen  = true;
+static bool cfgMsh         = false;
+static bool cfgWrs         = false;
+static bool cfgImg         = false;
 static Preferences prefs;
 
 static inline lv_color_t colBg()      { return lv_color_hex(PALETTES[cfgPalette].bg); }
@@ -100,7 +103,7 @@ static lv_obj_t *screens[SC_COUNT] = {};
 static int       curScreen         = SC_WATCH;
 
 // Widgets
-static lv_obj_t *lblLinkFace = nullptr, *lblDate = nullptr, *lblTime = nullptr, *lblSeconds = nullptr;
+static lv_obj_t *lblLinkFace = nullptr, *lblWeather = nullptr, *lblDate = nullptr, *lblTime = nullptr, *lblSeconds = nullptr;
 static lv_obj_t *lblBattery = nullptr, *barBattery = nullptr, *lblStepsFace = nullptr;
 static lv_obj_t *lblMediaState = nullptr, *lblMediaTrack = nullptr, *lblMediaArtist = nullptr;
 static lv_obj_t *lblMediaAlbum = nullptr, *boxMediaCard = nullptr, *btnMediaPlay = nullptr, *lblMediaPlay = nullptr;
@@ -148,8 +151,9 @@ static lv_obj_t *lblBrightVal = nullptr, *lblTimeoutVal = nullptr, *lblAbout = n
 static bool        dimmed          = false;
 static bool        deepOff         = false;
 static bool        ateWakeTouch    = false;
-static bool        gRideMode       = false;
-static uint32_t    gRideStartMs    = 0;
+static bool                  gRideMode       = false;
+static uint32_t              gRideStartMs    = 0;
+
 static volatile bool gBtnShort     = false;
 static volatile bool gBtnLong      = false;
 static lv_indev_t *gIndev          = nullptr;
@@ -435,6 +439,12 @@ static void buildWatch(lv_obj_t *scr)
     lv_obj_set_style_text_color(lblLinkFace, colAccent(), 0);
     lv_obj_align(lblLinkFace, LV_ALIGN_TOP_LEFT, 2, 0);
     lv_label_set_text(lblLinkFace, "ble");
+
+    lblWeather = lv_label_create(p);
+    lv_obj_set_style_text_font(lblWeather, FONT_XS, 0);
+    lv_obj_set_style_text_color(lblWeather, colText(), 0);
+    lv_obj_align(lblWeather, LV_ALIGN_TOP_LEFT, 58, 0);
+    lv_label_set_text(lblWeather, "");
 
     lblBattery = lv_label_create(p);
     lv_obj_set_style_text_font(lblBattery, FONT_XS, 0);
@@ -906,6 +916,7 @@ static void buildNotif(lv_obj_t *scr)
 {
     lv_obj_t *p = mkPage(scr);
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_flex_cross_place(p, LV_FLEX_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_row(p, 5, 0);
 
     lv_obj_t *hdrRow = lv_obj_create(p);
@@ -1391,7 +1402,7 @@ static void buildSettings(lv_obj_t *scr)
         mkButton(rrow, txt, 0, 0, 51, 26, cb, &lbl);
         if (lbl) {
             lv_obj_t *b = lv_obj_get_parent(lbl);
-            lv_obj_set_style_bg_color(b, on ? colAccent() : colSurface(), 0);
+            lv_obj_set_style_bg_color(b, on ? colAccent() : colBg(), 0);
             lv_obj_set_style_border_width(b, 1, 0);
             lv_obj_set_style_border_color(b, on ? colAccent() : colMuted(), 0);
             lv_obj_set_style_text_color(lbl, on ? colBg() : colMuted(), 0);
@@ -1476,6 +1487,12 @@ static void updateWatchLinkUI()
             lv_label_set_text_fmt(lblLinkFace, LV_SYMBOL_BLUETOOTH " adv%s", msh);
             lv_obj_set_style_text_color(lblLinkFace, colMuted(), 0);
         }
+    }
+    if (lblWeather) {
+        char wb[24] = {0};
+        blecomp::weatherSummary(wb, sizeof(wb));
+        lv_label_set_text(lblWeather, wb[0] ? wb : "--");
+        lv_obj_set_style_text_color(lblWeather, wb[0] ? colText() : colMuted(), 0);
     }
     if (lblStepsFace) {
         uint32_t un = blecomp::unreadCount();
@@ -1892,6 +1909,21 @@ static void updateBattery()
             lv_chart_set_next_value(chartBatt, serBatt, mv);
             lv_chart_refresh(chartBatt);
         }
+        static uint32_t s_lastBlogMs = 0;
+        if (s_lastBlogMs == 0 || (millis() - s_lastBlogMs >= 1800000UL)) {
+            s_lastBlogMs = millis();
+            File f = FFat.open("/blog.txt", "a");
+            if (f) {
+                time_t u = rtcNowUtc() + (time_t)cfgTzOffsetMin * 60;
+                struct tm t; tmFromUtc(u, t);
+                f.printf("%02d:%02d,%d%%,%ldmV,%lu,%d,%s\n",
+                         t.tm_hour, t.tm_min, (int)pct, (long)mv,
+                         (unsigned long)instance.getStepCounter(),
+                         blecomp::peerCount(),
+                         instance.isCharging() ? "chg" : "bat");
+                f.close();
+            }
+        }
     }
 }
 
@@ -2091,11 +2123,17 @@ static void handleSerial()
                     char out[256];
                     blecomp::statusText(out, sizeof(out));
                     Serial.println(out);
+                } else if (serialBuf == "BLE") {
+                    char out[256];
+                    blecomp::statusText(out, sizeof(out));
+                    Serial.println(out);
                 } else if (serialBuf == "M0") {
                     meshsvc::setEnabled(false);
+                    cfgMsh = false;
                     buildUI();
                 } else if (serialBuf == "M1") {
                     meshsvc::setEnabled(true);
+                    cfgMsh = true;
                     buildUI();
                 } else if (serialBuf.startsWith("MUS ")) {
                     String rest = serialBuf.substring(4);

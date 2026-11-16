@@ -69,6 +69,10 @@ uint32_t               gTrackPosAtMs = 0;
 char                   gQueue[6][48] = {{0}};
 int                    gQueueCount  = 0;
 
+bool                   gWeatherOk   = false;
+int                    gWeatherC    = 0;
+char                   gWeatherCond[12] = {0};
+
 bool                   gNavActive   = false;
 char                   gNavAction[24] = {0};
 char                   gNavDist[24]   = {0};
@@ -498,6 +502,56 @@ void handleLine(const char *raw)
                 gUiDirty = true;
                 portEXIT_CRITICAL(&gMux);
             }
+        } else if (strcmp(type, "weather") == 0) {
+            int temp = 0;
+            const char *tp = strstr(json, "\"temp\":");
+            if (tp) {
+                temp = atoi(tp + 7);
+                if (temp > 150) temp -= 273;  // Gadgetbridge sends Kelvin (e.g. 295)
+            }
+            char txt[32] = {0};
+            extractJsonStr(json, "txt", txt, sizeof(txt));
+            String w(txt);
+            w.toLowerCase();
+            const char *shortC = "CLR";
+            if (w.indexOf("thunder") >= 0 || w.indexOf("storm") >= 0) shortC = "STRM";
+            else if (w.indexOf("rain") >= 0 || w.indexOf("drizzle") >= 0 || w.indexOf("shower") >= 0) shortC = "RAIN";
+            else if (w.indexOf("fog") >= 0 || w.indexOf("mist") >= 0) shortC = "FOG";
+            else if (w.indexOf("snow") >= 0) shortC = "SNOW";
+            else if (w.indexOf("cloud") >= 0 || w.indexOf("overcast") >= 0) shortC = "CLD";
+            else if (w.indexOf("sun") >= 0 || w.indexOf("clear") >= 0) shortC = "SUN";
+            portENTER_CRITICAL(&gMux);
+            gWeatherOk = (tp != nullptr);
+            gWeatherC  = temp;
+            strncpy(gWeatherCond, shortC, sizeof(gWeatherCond) - 1);
+            gWeatherCond[sizeof(gWeatherCond) - 1] = 0;
+            gUiDirty = true;
+            portEXIT_CRITICAL(&gMux);
+        } else if (strcmp(type, "weather") == 0) {
+            int temp = 0;
+            const char *tp = strstr(json, "\"temp\":");
+            if (tp) {
+                temp = atoi(tp + 7);
+                if (temp > 150) temp -= 273;  // Gadgetbridge sends Kelvin (e.g. 295)
+            }
+            char txt[32] = {0};
+            extractJsonStr(json, "txt", txt, sizeof(txt));
+            String w(txt);
+            w.toLowerCase();
+            const char *shortC = "CLR";
+            if (w.indexOf("thunder") >= 0 || w.indexOf("storm") >= 0) shortC = "STRM";
+            else if (w.indexOf("rain") >= 0 || w.indexOf("drizzle") >= 0 || w.indexOf("shower") >= 0) shortC = "RAIN";
+            else if (w.indexOf("fog") >= 0 || w.indexOf("mist") >= 0) shortC = "FOG";
+            else if (w.indexOf("snow") >= 0) shortC = "SNOW";
+            else if (w.indexOf("cloud") >= 0 || w.indexOf("overcast") >= 0) shortC = "CLD";
+            else if (w.indexOf("sun") >= 0 || w.indexOf("clear") >= 0) shortC = "SUN";
+            portENTER_CRITICAL(&gMux);
+            gWeatherOk = (tp != nullptr);
+            gWeatherC  = temp;
+            strncpy(gWeatherCond, shortC, sizeof(gWeatherCond) - 1);
+            gWeatherCond[sizeof(gWeatherCond) - 1] = 0;
+            gUiDirty = true;
+            portEXIT_CRITICAL(&gMux);
         } else if (strcmp(type, "musicinfo") == 0) {
             char artist[56], track[80], album[56];
             extractJsonStr(json, "artist", artist, sizeof(artist));
@@ -1178,6 +1232,20 @@ void inboxSummary(char *out, size_t n)
             off += (size_t)snprintf(out + off, n - off, "- %s: %s %s\n",
                                     gInbox[i].src, gInbox[i].title, gInbox[i].body);
         }
+    }
+    portEXIT_CRITICAL(&gMux);
+}
+
+bool weatherActive() { return gWeatherOk; }
+
+void weatherSummary(char *out, size_t n)
+{
+    if (!out || !n) return;
+    portENTER_CRITICAL(&gMux);
+    if (!gWeatherOk) {
+        out[0] = 0;
+    } else {
+        snprintf(out, n, "%dC %s", gWeatherC, gWeatherCond[0] ? gWeatherCond : "CLR");
     }
     portEXIT_CRITICAL(&gMux);
 }
