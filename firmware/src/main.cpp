@@ -2076,7 +2076,11 @@ static void handleSerial()
                             File f = LittleFS.open("/lock.bin", "w");
                             if (f) { f.write(gLockBuf, expect); f.close(); }
                             gLockReady = true;
-                            if (imgLockBg) lv_image_set_src(imgLockBg, &gLockDsc);
+                            lv_image_cache_drop(&gLockDsc);
+                            if (imgLockBg) {
+                                lv_image_set_src(imgLockBg, &gLockDsc);
+                                lv_obj_invalidate(imgLockBg);
+                            }
                             Serial.printf("[img] ok (%u bytes)\n", (unsigned)got);
                         } else {
                             Serial.printf("[img] err got %u/%u\n", (unsigned)got, (unsigned)expect);
@@ -2232,6 +2236,7 @@ static void buildUI()
 static void enterDeepOff()
 {
     if (deepOff) return;
+    if (cfgLockScreen && !gRideMode) showScreen(SC_LOCK);
     deepOff = true;
     dimmed  = true;
     if (wakeShield) lv_obj_remove_flag(wakeShield, LV_OBJ_FLAG_HIDDEN);
@@ -2388,11 +2393,13 @@ void loop()
     if (gBtnShort) {
         gBtnShort = false;
         if (deepOff || dimmed) {
+            bool wasDeep = deepOff;
             wakeScreen();
-            showScreen(bikeCtx ? SC_NAV : SC_WATCH);
+            if (bikeCtx) showScreen(SC_NAV);
+            else if (!wasDeep || !cfgLockScreen) showScreen(SC_WATCH);
         } else if (bikeCtx) {
             showScreen(curScreen == SC_NAV ? SC_MEDIA : SC_NAV);
-        } else if (curScreen != SC_WATCH) {
+        } else if (curScreen != SC_WATCH && curScreen != SC_LOCK) {
             showScreen(SC_WATCH);
         } else {
             enterDeepOff();
