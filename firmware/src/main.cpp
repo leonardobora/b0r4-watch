@@ -2445,9 +2445,14 @@ void setup()
 
     instance.setBrightness(cfgBright);
     {
-        lv_obj_t *splash = lv_obj_create(nullptr);
+        lv_obj_t *splash = lv_obj_create(lv_layer_top());
+        lv_obj_set_size(splash, 240, 240);
+        lv_obj_center(splash);
         lv_obj_set_style_bg_color(splash, colBg(), 0);
         lv_obj_set_style_bg_opa(splash, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(splash, 0, 0);
+        lv_obj_set_style_radius(splash, 0, 0);
+        lv_obj_set_scrollbar_mode(splash, LV_SCROLLBAR_MODE_OFF);
         lv_obj_t *st = lv_label_create(splash);
         lv_label_set_text(st, "B0R4 Watch");
         lv_obj_set_style_text_font(st, FONT_L, 0);
@@ -2458,13 +2463,12 @@ void setup()
         lv_obj_set_style_text_font(sm, FONT_XL, 0);
         lv_obj_set_style_text_color(sm, colText(), 0);
         lv_obj_align(sm, LV_ALIGN_CENTER, 0, 26);
-        lv_screen_load(splash);
         lv_timer_handler();
         playTonePair(660, 988, 130);
-        delay(850);
+        delay(750);
+        lv_obj_delete(splash);
         if (cfgLockScreen) curScreen = SC_LOCK;
         buildUI();
-        lv_obj_delete(splash);
     }
 
     instance.bma423.selectPlatform(SensorBMA423::Platform::WRISTBAND);
