@@ -1250,6 +1250,17 @@ void weatherSummary(char *out, size_t n)
     portEXIT_CRITICAL(&gMux);
 }
 
+void setWeatherLocal(int tempC, const char *txt)
+{
+    portENTER_CRITICAL(&gMux);
+    gWeatherOk = true;
+    gWeatherC  = tempC;
+    strncpy(gWeatherCond, (txt && txt[0]) ? txt : "CLR", sizeof(gWeatherCond) - 1);
+    gWeatherCond[sizeof(gWeatherCond) - 1] = 0;
+    gUiDirty = true;
+    portEXIT_CRITICAL(&gMux);
+}
+
 const char *musicTrack()   { return gTrack; }
 const char *musicArtist()  { return gArtist; }
 const char *musicAlbum()   { return gAlbum; }

@@ -2235,6 +2235,14 @@ static void handleSerial()
                         updateClock();
                         Serial.printf("[rtc] set to %ld (utc)\n", (long)epoch);
                     }
+                } else if (serialBuf.startsWith("WX ")) {
+                    String rest = serialBuf.substring(3);
+                    int bar = rest.indexOf('|');
+                    int tc = (bar > 0) ? rest.substring(0, bar).toInt() : rest.toInt();
+                    String cond = (bar > 0) ? rest.substring(bar + 1) : String("CLR");
+                    blecomp::setWeatherLocal(tc, cond.c_str());
+                    updateWatchLinkUI();
+                    Serial.printf("[wx] %dC %s\n", tc, cond.c_str());
                 } else if (serialBuf == "W" || serialBuf == "w") {
                     Serial.printf("[status] batt=%.0f%% %.0fmV  steps=%lu  screen=%d  ble=%d  peers=%d  mesh=%d  cpu=%luMHz\n",
                                   instance.getBatteryPercent(), instance.getBattVoltage(),
