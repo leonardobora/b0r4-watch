@@ -123,6 +123,9 @@ static bool      gLockReady = false;
 // Non-blocking Top Toast (lv_layer_top)
 static lv_obj_t *boxToast = nullptr, *lblToast = nullptr;
 static uint32_t  gToastHideAt = 0;
+
+// Pull-down-to-home spring handle (lv_layer_top)
+static lv_obj_t *boxPullHome = nullptr, *lblPullHome = nullptr;
 static lv_obj_t *lblNavEta = nullptr, *lblNavDist = nullptr, *lblNavAction = nullptr, *lblNavInstr = nullptr;
 static lv_obj_t *lblNavHdr = nullptr, *lblNavSpeed = nullptr, *lblNavMusic = nullptr, *lblRideBtn = nullptr;
 static lv_obj_t *wakeShield = nullptr;
@@ -1923,6 +1926,16 @@ static void onPrev(lv_event_t *) {
     }
 }
 
+static void animPullY(void *obj, int32_t v)
+{
+    lv_obj_set_y((lv_obj_t *)obj, v);
+}
+
+static void animPullDone(lv_anim_t *a)
+{
+    if (a && a->var) lv_obj_add_flag((lv_obj_t *)a->var, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void pollSwipe()
 {
     if (!gIndev) gIndev = lv_indev_get_next(nullptr);
@@ -1930,17 +1943,49 @@ static void pollSwipe()
 
     lv_indev_state_t st = lv_indev_get_state(gIndev);
     if (st == LV_INDEV_STATE_PRESSED) {
+        lv_point_t pt;
+        lv_indev_get_point(gIndev, &pt);
         if (!touchWasDown) {
             touchWasDown = true;
-            lv_point_t pt;
-            lv_indev_get_point(gIndev, &pt);
             touchX0 = pt.x;
             touchY0 = pt.y;
+        } else if (boxPullHome && curScreen != SC_LOCK && curScreen != SC_SETTINGS &&
+                   curScreen != SC_WATCH && !(gRideMode && curScreen == SC_NAV)) {
+            int16_t dx = (int16_t)(pt.x - touchX0);
+            int16_t dy = (int16_t)(pt.y - touchY0);
+            int16_t adx = dx < 0 ? (int16_t)-dx : dx;
+            if (dy > 10 && dy > adx) {
+                int16_t py = (dy / 2);
+                if (py > 48) py = 48;
+                lv_obj_remove_flag(boxPullHome, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_move_foreground(boxPullHome);
+                lv_obj_set_pos(boxPullHome, 0, py - 24);
+                bool armed = (dy >= 42);
+                lv_obj_set_style_border_color(boxPullHome, armed ? colAccent() : colMuted(), 0);
+                if (lblPullHome) {
+                    lv_label_set_text(lblPullHome, armed ? LV_SYMBOL_HOME : LV_SYMBOL_DOWN);
+                    lv_obj_set_style_text_color(lblPullHome, armed ? colAccent() : colText(), 0);
+                }
+            } else {
+                lv_obj_add_flag(boxPullHome, LV_OBJ_FLAG_HIDDEN);
+            }
         }
         return;
     }
     if (!touchWasDown) return;
     touchWasDown = false;
+
+    if (boxPullHome && !lv_obj_has_flag(boxPullHome, LV_OBJ_FLAG_HIDDEN)) {
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, boxPullHome);
+        lv_anim_set_values(&a, lv_obj_get_y(boxPullHome), -32);
+        lv_anim_set_duration(&a, 180);
+        lv_anim_set_path_cb(&a, lv_anim_path_overshoot);
+        lv_anim_set_exec_cb(&a, animPullY);
+        lv_anim_set_completed_cb(&a, animPullDone);
+        lv_anim_start(&a);
+    }
 
     if (ateWakeTouch) {
         ateWakeTouch = false;
@@ -1963,6 +2008,7 @@ static void pollSwipe()
         return;
     }
     if (curScreen != SC_SETTINGS && dy >= 42 && ady > adx) {
+        instance.vibrator();
         showScreen(SC_WATCH);
         return;
     }
@@ -2216,6 +2262,23 @@ static void buildUI()
         lv_obj_set_style_text_font(lblToast, FONT_XS, 0);
         lv_obj_set_style_text_color(lblToast, colText(), 0);
         lv_obj_center(lblToast);
+    }
+    if (!boxPullHome) {
+        boxPullHome = lv_obj_create(lv_layer_top());
+        lv_obj_set_size(boxPullHome, 44, 24);
+        lv_obj_align(boxPullHome, LV_ALIGN_TOP_MID, 0, -28);
+        lv_obj_set_style_bg_color(boxPullHome, colBg(), 0);
+        lv_obj_set_style_border_width(boxPullHome, 2, 0);
+        lv_obj_set_style_border_color(boxPullHome, colMuted(), 0);
+        lv_obj_set_style_radius(boxPullHome, 0, 0);
+        lv_obj_set_scrollbar_mode(boxPullHome, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_remove_flag(boxPullHome, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(boxPullHome, LV_OBJ_FLAG_HIDDEN);
+        lblPullHome = lv_label_create(boxPullHome);
+        lv_obj_set_style_text_font(lblPullHome, FONT_S, 0);
+        lv_obj_set_style_text_color(lblPullHome, colText(), 0);
+        lv_label_set_text(lblPullHome, LV_SYMBOL_DOWN);
+        lv_obj_center(lblPullHome);
     }
     if (!wakeShield) {
         wakeShield = lv_obj_create(lv_layer_top());
